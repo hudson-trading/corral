@@ -45,35 +45,36 @@ different threads do not interact with each other.
 The code snippet below establishes a TCP connection to one of two
 remote servers, whichever responds first, and returns the socket.
 
-    using tcp = boost::asio::tcp;
-    boost::asio::io_service io_service;
+```cpp
+using tcp = boost::asio::tcp;
+boost::asio::io_service io_service;
 
-    corral::Task<tcp::socket> myConnect(tcp::endpoint main, tcp::endpoint backup) {
-        tcp::socket mainSock(io_service), backupSock(io_service);
+corral::Task<tcp::socket> myConnect(tcp::endpoint main, tcp::endpoint backup) {
+    tcp::socket mainSock(io_service), backupSock(io_service);
 
-        auto [mainErr, backupErr, timeout] = co_await corral::anyOf(
-            // Main connection attempt
-            mainSock.async_connect(main, corral::asio_nothrow_awaitable),
+    auto [mainErr, backupErr, timeout] = co_await corral::anyOf(
+        // Main connection attempt
+        mainSock.async_connect(main, corral::asio_nothrow_awaitable),
 
-            // Backup connection, with staggered startup
-            [&]() -> corral::Task<boost::system::error_code> {
-                co_await corral::sleepFor(io_service, 100ms);
-                co_return co_await backupSock.async_connect(
-                    backup, corral::asio_nothrow_awaitable);
-            },
+        // Backup connection, with staggered startup
+        [&]() -> corral::Task<boost::system::error_code> {
+            co_await corral::sleepFor(io_service, 100ms);
+            co_return co_await backupSock.async_connect(
+                backup, corral::asio_nothrow_awaitable);
+        },
 
-            // Timeout on the whole thing
-            corral::sleepFor(io_service, 3s));
+        // Timeout on the whole thing
+        corral::sleepFor(io_service, 3s));
 
-        if (mainErr && !*mainErr) {
-            co_return mainSock;
-        } else if (backupErr && !*backupErr) {
-            co_return backupSock;
-        } else {
-            throw std::runtime_error("both connections failed");
-        }
+    if (mainErr && !*mainErr) {
+        co_return mainSock;
+    } else if (backupErr && !*backupErr) {
+        co_return backupSock;
+    } else {
+        throw std::runtime_error("both connections failed");
     }
-
+}
+```
 ## Prerequisites and installation
 
 Corral is a header-only library, so you can just copy the `corral`
