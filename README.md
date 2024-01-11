@@ -75,6 +75,7 @@ corral::Task<tcp::socket> myConnect(tcp::endpoint main, tcp::endpoint backup) {
     }
 }
 ```
+
 ## Prerequisites and installation
 
 Corral is a header-only library, so you can just copy the `corral`
