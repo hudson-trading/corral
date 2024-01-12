@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(corral INTERFACE
     corral/asio.h
     corral/CBPortal.h
+    corral/Channel.h
     corral/concepts.h
     corral/config.h
     corral/defs.h
@@ -25,8 +26,12 @@ add_library(corral INTERFACE
     corral/wait.h
 
     corral/detail/ABI.h
+    corral/detail/frames.h
+    corral/detail/introspect.h
     corral/detail/IntrusiveList.h
     corral/detail/ParkingLot.h
+    corral/detail/platform.h
+    corral/detail/PointerBits.h
     corral/detail/Promise.h
     corral/detail/Queue.h
     corral/detail/ScopeGuard.h
