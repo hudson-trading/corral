@@ -929,6 +929,34 @@ CORRAL_TEST_CASE("nursery-sync-cancel") {
     CATCH_CHECK(cancelled);
 }
 
+CORRAL_TEST_CASE("nursery-multi-cancel") {
+    auto task = [&](Nursery& n) -> Task<> {
+        co_await t.sleep(1ms, noncancellable);
+        n.cancel();
+    };
+    CORRAL_WITH_NURSERY(n) {
+        n.start(task(n));
+        n.start(task(n));
+        n.start(task(n));
+        co_return join;
+    };
+}
+
+CORRAL_TEST_CASE("nursery-multi-exception") {
+    auto task = [&](Nursery& n) -> Task<> {
+        co_await t.sleep(1ms, noncancellable);
+        throw std::runtime_error("boo!");
+    };
+    try {
+        CORRAL_WITH_NURSERY(n) {
+            n.start(task(n));
+            n.start(task(n));
+            n.start(task(n));
+            co_return join;
+        };
+    } catch (std::runtime_error&) {}
+}
+
 CORRAL_TEST_CASE("exceptions") {
     auto bad = [&]() -> Task<> {
         co_await std::suspend_never();
@@ -951,6 +979,7 @@ CORRAL_TEST_CASE("nursery-exception") {
                 co_return join;
             },
             Catch::Equals("boo!"));
+    CATCH_CHECK(t.now() == 0ms);
 }
 
 CORRAL_TEST_CASE("shared") {

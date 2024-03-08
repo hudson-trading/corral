@@ -139,6 +139,8 @@ class Nursery : private detail::TaskParent<void> {
     void storeSuccess() override {}
     void storeException() override;
 
+    void doCancel();
+
   protected:
     Executor* executor_ = nullptr;
     detail::flat_hash_set<detail::BasePromise*> tasks_;
@@ -307,12 +309,7 @@ template <Awaitable<void> Aw> void Nursery::start(Aw&& aw) {
     }
 }
 
-inline void Nursery::cancel() {
-    CORRAL_TRACE("nursery %p cancellation requested", this);
-    if (!exception_) {
-        exception_ = cancellationRequest();
-    }
-
+inline void Nursery::doCancel() {
     if (!executor_ || tasks_.empty()) {
         return;
     }
@@ -329,6 +326,17 @@ inline void Nursery::cancel() {
     }
 }
 
+inline void Nursery::cancel() {
+    if (exception_) {
+        return; // already cancelling
+    }
+    CORRAL_TRACE("nursery %p cancellation requested", this);
+    if (!exception_) {
+        exception_ = cancellationRequest();
+    }
+    doCancel();
+}
+
 inline void Nursery::storeException() {
     if (parent_ == nullptr) {
         // This is an UnsafeNursery that has not been join()'ed. There is no
@@ -337,7 +345,7 @@ inline void Nursery::storeException() {
     }
     if (!exception_ || exception_ == cancellationRequest()) {
         exception_ = std::current_exception();
-        cancel();
+        doCancel();
     }
 }
 
