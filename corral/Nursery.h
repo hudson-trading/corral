@@ -343,8 +343,11 @@ inline void Nursery::storeException() {
         // one we can pass our exception to, so we have no choice but to...
         std::terminate();
     }
+    bool needCancel = (!exception_);
     if (!exception_ || exception_ == cancellationRequest()) {
         exception_ = std::current_exception();
+    }
+    if (needCancel) {
         doCancel();
     }
 }

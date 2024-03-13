@@ -957,6 +957,23 @@ CORRAL_TEST_CASE("nursery-multi-exception") {
     } catch (std::runtime_error&) {}
 }
 
+CORRAL_TEST_CASE("nursery-cancel-exception") {
+    CATCH_CHECK_THROWS_WITH(
+            CORRAL_WITH_NURSERY(n) {
+                n.start([&]() -> Task<> {
+                    co_await t.sleep(2ms, noncancellable);
+                    throw std::runtime_error("boo!");
+                });
+                n.start([&]() -> Task<> {
+                    co_await t.sleep(3ms, noncancellable);
+                });
+                co_await t.sleep(1ms);
+                co_return cancel;
+            },
+            Catch::Equals("boo!"));
+    CATCH_CHECK(t.now() == 3ms);
+}
+
 CORRAL_TEST_CASE("exceptions") {
     auto bad = [&]() -> Task<> {
         co_await std::suspend_never();
