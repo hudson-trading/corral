@@ -27,6 +27,7 @@
 
 #include "detail/ABI.h"
 #include "detail/IntrusiveList.h"
+#include "detail/IntrusivePtr.h"
 #include "detail/utility.h"
 
 namespace corral {
@@ -82,14 +83,15 @@ template <class Object> class Shared {
     corral::Awaitable auto operator co_await();
 
   private:
-    std::shared_ptr<State> state_;
+    detail::IntrusivePtr<State> state_;
 };
 
 /// Awaitable object used for a single co_await on a shared task
 template <class Object>
 class Shared<Object>::Awaitable : public detail::IntrusiveListItem<Awaitable> {
   public:
-    explicit Awaitable(std::shared_ptr<State> state) : state_(state) {}
+    explicit Awaitable(detail::IntrusivePtr<State> state)
+      : state_(std::move(state)) {}
     bool await_ready() const noexcept;
     auto await_early_cancel() noexcept;
     void await_set_executor(Executor* ex) noexcept;
@@ -111,7 +113,7 @@ class Shared<Object>::Awaitable : public detail::IntrusiveListItem<Awaitable> {
     // with any shared task; this can occur when awaiting a moved-from
     // Shared, or after cancellation of an awaitable that is not the last
     // one for its task.
-    std::shared_ptr<State> state_;
+    detail::IntrusivePtr<State> state_;
     Handle parent_;
 };
 
@@ -121,7 +123,8 @@ class Shared<Object>::Awaitable : public detail::IntrusiveListItem<Awaitable> {
 
 /// Storage and lifetime management for the shared task underlying a Shared<T>
 template <class Object>
-class Shared<Object>::State : private detail::ProxyFrame {
+class Shared<Object>::State : private detail::ProxyFrame,
+                              public detail::RefCounted<State> {
   public:
     template <class... Args> explicit State(Args&&... args);
     Object* get() { return &object_; }
@@ -455,13 +458,13 @@ void Shared<Object>::Awaitable::await_introspect(auto& c) const noexcept {
 
 template <class Object>
 Shared<Object>::Shared(Object&& obj)
-  : state_(std::make_shared<State>(std::forward<Object>(obj))) {}
+  : state_(new State(std::forward<Object>(obj))) {}
 
 template <class Object>
 template <class... Args>
     requires(std::is_constructible_v<Object, Args...>)
 Shared<Object>::Shared(std::in_place_t, Args&&... args)
-  : state_(std::make_shared<State>(std::forward<Args>(args)...)) {}
+  : state_(new State(std::forward<Args>(args)...)) {}
 
 template <class Object> bool Shared<Object>::closed() const noexcept {
     return state_ ? state_->closed() : true;

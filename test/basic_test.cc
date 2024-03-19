@@ -974,6 +974,16 @@ CORRAL_TEST_CASE("nursery-cancel-exception") {
     CATCH_CHECK(t.now() == 3ms);
 }
 
+CORRAL_TEST_CASE("nursery-cancel-from-outside") {
+    CORRAL_WITH_NURSERY(n) {
+        n.start([&]() -> Task<> { co_await t.sleep(10ms); });
+        t.schedule(1ms, [&] { n.cancel(); });
+        co_return join;
+    };
+
+    CATCH_CHECK(t.now() == 1ms);
+}
+
 CORRAL_TEST_CASE("exceptions") {
     auto bad = [&]() -> Task<> {
         co_await std::suspend_never();

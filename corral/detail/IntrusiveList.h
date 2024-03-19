@@ -27,6 +27,7 @@
 namespace corral::detail {
 
 template <class T> class IntrusiveList;
+template <class T, class Item> class IntrusiveIterator;
 
 template <class T> class IntrusiveListItem {
   public:
@@ -46,17 +47,48 @@ template <class T> class IntrusiveListItem {
 
   private:
     friend class IntrusiveList<T>;
+    template <class, class> friend class IntrusiveIterator;
+
     IntrusiveListItem<T>* next_ = nullptr;
     IntrusiveListItem<T>* prev_ = nullptr;
 };
 
 
+template <class T, class Item> class IntrusiveIterator {
+    Item* ptr_ = nullptr;
+
+    T* get() const { return static_cast<T*>(ptr_); }
+
+  public:
+    using iterator_category = std::forward_iterator_tag;
+    using value_type = T;
+    using difference_type = std::size_t;
+
+    IntrusiveIterator() = default;
+    explicit IntrusiveIterator(Item* ptr) : ptr_(ptr) {}
+
+    T& operator*() const { return *get(); }
+    T* operator->() const { return get(); }
+
+    IntrusiveIterator& operator++() {
+        ptr_ = ptr_->next_;
+        return *this;
+    }
+    IntrusiveIterator operator++(int) {
+        IntrusiveIterator copy = *this;
+        ++*this;
+        return copy;
+    }
+
+    bool operator==(const IntrusiveIterator& rhs) const {
+        return ptr_ == rhs.ptr_;
+    }
+};
+
+
 template <class T> class IntrusiveList : private IntrusiveListItem<T> {
   public:
-    IntrusiveList() {
-        static_assert(std::is_base_of_v<IntrusiveListItem<T>, T>);
-        this->next_ = this->prev_ = this;
-    }
+    IntrusiveList() { this->next_ = this->prev_ = this; }
 
     IntrusiveList(IntrusiveList&& rhs) noexcept {
         if (rhs.empty()) {
@@ -92,8 +124,11 @@ template <class T> class IntrusiveList : private IntrusiveListItem<T> {
         return !empty() && this->next_->next_ == this;
     }
 
-    T& front() const { return *static_cast<T*>(this->next_); }
+    T& front() { return *static_cast<T*>(this->next_); }
+    const T& front() const { return *static_cast<const T*>(this->next_); }
     void pop_front() { this->next_->unlink(); }
+
+    void erase(T& item) { item.unlink(); }
 
     void push_back(T& item) {
         item.unlink();
@@ -102,6 +137,15 @@ template <class T> class IntrusiveList : private IntrusiveListItem<T> {
         this->prev_->next_ = &item;
         this->prev_ = &item;
     }
+
+    using iterator = IntrusiveIterator<T, IntrusiveListItem<T>>;
+    iterator begin() { return iterator(this->next_); }
+    iterator end() { return iterator(this); }
+
+    using const_iterator =
+            IntrusiveIterator<const T, const IntrusiveListItem<T>>;
+    const_iterator begin() const { return const_iterator(this->next_); }
+    const_iterator end() const { return const_iterator(this); }
 };
 
 } // namespace corral::detail

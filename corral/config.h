@@ -61,19 +61,6 @@
 #define CORRAL_THREAD_LOCAL thread_local
 #endif
 
-// Users can provide their own implementation of flat_hash_set,
-// if a more efficient version than `std::unordered_set` is available to them.
-// (For example, one option would be absl::flat_hash_set.) This is primarily
-// used to store the set of tasks running in a nursery. To do so, #define
-// CORRAL_FLAT_HASH_SET and provide a corral::detail::flat_hash_set typedef.
-#ifndef CORRAL_FLAT_HASH_SET
-#define CORRAL_FLAT_HASH_SET
-#include <unordered_set>
-namespace corral::detail {
-template <class T> using flat_hash_set = std::unordered_set<T>;
-}
-#endif
-
 // Users can provide their own logic to handle the case where an
 // UnsafeNursery is destroyed, or a corral::run()'s event loop stops,
 // before all tasks have exited. For example, this could

@@ -28,6 +28,7 @@
 
 #include "Executor.h"
 #include "Task.h"
+#include "detail/IntrusiveList.h"
 #include "detail/ParkingLot.h"
 #include "detail/Promise.h"
 #include "utility.h"
@@ -102,7 +103,7 @@ class Nursery : private detail::TaskParent<void> {
 
     ~Nursery() { CORRAL_ASSERT(tasks_.empty()); }
 
-    size_t taskCount() const noexcept { return tasks_.size(); }
+    size_t taskCount() const noexcept { return taskCount_; }
 
     /// Starts a task in the nursery.
     void start(Task<void> t) { addTask(std::move(t), this).resume(); }
@@ -143,7 +144,8 @@ class Nursery : private detail::TaskParent<void> {
 
   protected:
     Executor* executor_ = nullptr;
-    detail::flat_hash_set<detail::BasePromise*> tasks_;
+    detail::IntrusiveList<detail::BasePromise> tasks_;
+    size_t taskCount_ = 0;
     Handle parent_ = nullptr;
     std::exception_ptr exception_;
 };
@@ -262,9 +264,12 @@ class UnsafeNursery final : public Nursery, private Executor {
 
     // Allow the nursery itself to be an introspection root for its executor
     void await_introspect(detail::TaskTreeCollector& c) const noexcept {
+        static_assert(std::is_base_of_v<
+                      detail::IntrusiveListItem<detail::BasePromise>,
+                      detail::BasePromise>);
         c.node("UnsafeNursery");
-        for (auto t : tasks_) {
-            c.child(*t);
+        for (auto& t : tasks_) {
+            c.child(t);
         }
     }
 };
@@ -306,11 +311,12 @@ inline Handle Nursery::addTask(Task<Ret> task, TaskParent<Ret>* parent) {
     }
     CORRAL_ASSERT(promise);
     CORRAL_TRACE("pr %p handed to nursery %p (%zu tasks total)", promise, this,
-                 tasks_.size() + 1);
+                 taskCount_ + 1);
     if (exception_) {
         promise->cancel();
     }
-    tasks_.insert(promise);
+    tasks_.push_back(*promise);
+    ++taskCount_;
     promise->setExecutor(executor_);
     return promise->start(parent, parent_);
 }
@@ -343,13 +349,21 @@ inline void Nursery::doCancel() {
     // Task cancellation may modify tasks_ arbitrarily,
     // invalidating iterators to task being cancelled or its
     // neighbors, thereby making it impossible to traverse through
-    // tasks_ safely; so make a copy.
-    std::vector<detail::BasePromise*> tasks(tasks_.begin(), tasks_.end());
-    for (detail::BasePromise* t : tasks) {
-        if (tasks_.contains(t)) {
-            t->cancel();
-        }
-    }
+    // tasks_ safely; so defer calling cancel() through the executor.
+    Executor* ex = executor_;
+    ex->capture(
+            [this] {
+                for (detail::BasePromise& t : tasks_) {
+                    executor_->schedule(
+                            +[](detail::BasePromise* p) noexcept {
+                                p->cancel();
+                            },
+                            &t);
+                }
+            },
+            taskCount_);
+
+    ex->runSoon();
 }
 
 inline void Nursery::cancel() {
@@ -381,8 +395,9 @@ inline void Nursery::storeException() {
 
 inline Handle Nursery::continuation(detail::BasePromise* promise) noexcept {
     CORRAL_TRACE("pr %p done in nursery %p (%zu tasks remaining)", promise,
-                 this, tasks_.size() - 1);
-    tasks_.erase(promise);
+                 this, taskCount_ - 1);
+    tasks_.erase(*promise);
+    --taskCount_;
 
     Executor* executor = executor_;
     Handle ret = noopHandle();
@@ -479,8 +494,8 @@ class Nursery::Scope : public detail::NurseryScopeBase,
 
         void introspect(detail::TaskTreeCollector& c) const noexcept {
             c.node("Nursery");
-            for (auto t : tasks_) {
-                c.child(*t);
+            for (auto& t : tasks_) {
+                c.child(t);
             }
         }
     };

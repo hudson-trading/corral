@@ -201,8 +201,8 @@ class Executor {
     /// separate list. Then runs everything in the list.
     /// NB: tasks scheduled as a result of executing the capture list
     /// go into previously used list.
-    template <class Fn> void capture(Fn fn) {
-        Tasks tmp{Capacity::Small};
+    template <class Fn> void capture(Fn fn, size_t capacity = Capacity::Small) {
+        Tasks tmp{capacity};
         detail::ScopeGuard guard([&] { drain(tmp); });
 
         Tasks* oldReady = ready_;

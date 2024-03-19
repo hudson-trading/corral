@@ -30,6 +30,7 @@
 #include "../defs.h"
 #include "../utility.h"
 #include "ABI.h"
+#include "IntrusiveList.h"
 #include "ScopeGuard.h"
 #include "frames.h"
 #include "introspect.h"
@@ -90,7 +91,7 @@ template <> class TaskParent<void> : public BaseTaskParent {
 
 /// The promise type for a corral coroutine. (Promise<T> adds the parts
 /// that depend on the task's return type.)
-class BasePromise : private TaskFrame {
+class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     /// Type-erased cancellation related portion of awaitable interface.
     /// This captures how to cancel an awaitable the task is waiting
     /// on, if any; otherwise its storage may be reused for denoting

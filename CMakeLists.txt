@@ -29,6 +29,7 @@ add_library(corral INTERFACE
     corral/detail/frames.h
     corral/detail/introspect.h
     corral/detail/IntrusiveList.h
+    corral/detail/IntrusivePtr.h
     corral/detail/ParkingLot.h
     corral/detail/platform.h
     corral/detail/PointerBits.h
