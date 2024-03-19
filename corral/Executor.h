@@ -34,6 +34,7 @@
 #include "defs.h"
 #include "detail/Queue.h"
 #include "detail/ScopeGuard.h"
+#include "detail/platform.h"
 #include "detail/utility.h"
 
 namespace corral {
@@ -144,6 +145,9 @@ class Executor {
         CORRAL_ASSERT(buffer_.empty());
         if (running_ != nullptr) {
             *running_ = false;
+        }
+        if (current() == this) {
+            current() = nullptr;
         }
     }
 
@@ -318,6 +322,9 @@ class Executor {
     const void* rootAwaitable_ = nullptr;
     void (*collectTaskTree_)(const void* root,
                              detail::TaskTreeCollector&) noexcept = nullptr;
+
+    [[no_unique_address]] CORRAL_UNUSED_MEMBER decltype(CORRAL_ENTER_ASYNC_UNIVERSE)
+            universeGuard_ = CORRAL_ENTER_ASYNC_UNIVERSE;
 };
 
 namespace detail {

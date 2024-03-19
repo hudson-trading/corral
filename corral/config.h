@@ -104,3 +104,17 @@ template <class Promise> using CoroutineHandle = std::coroutine_handle<Promise>;
 // machine. This is somewhat expensive and is useful primarily for
 // diagnosing bugs in corral itself.
 /* #define CORRAL_AWAITABLE_STATE_DEBUG */
+
+// You may define CORRAL_ENTER_ASYNC_UNIVERSE to provide an expression
+// which will be evaluated upon entering an "async universe" (i.e. when
+// corral::run() is entered, or when UnsafeNursery is constructed),
+// and destroyed upon leaving async universe. This may be useful for
+// installing additional debugging hooks which only make sense in
+// asynchronous mode (like dumping async stack traces on asserts).
+//
+// Note that there may be multiple concurrent async universes in flight.
+#ifndef CORRAL_ENTER_ASYNC_UNIVERSE
+#include <variant>
+#define CORRAL_ENTER_ASYNC_UNIVERSE                                            \
+    std::monostate {}
+#endif

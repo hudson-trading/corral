@@ -1189,6 +1189,33 @@ CORRAL_TEST_CASE("multiverse") {
     CATCH_CHECK(t2.now() == 3ms);
 }
 
+CORRAL_TEST_CASE("unsafe-nursery-async-close") {
+    auto n = std::make_unique<UnsafeNursery>(t);
+
+    CATCH_SECTION("outside") {
+        n->start([&]() -> Task<> { co_await t.sleep(5ms, noncancellable); });
+        co_await t.sleep(1ms);
+
+        Event e;
+        n->asyncClose([&]() noexcept {
+            n.reset();
+            e.trigger();
+        });
+        co_await e;
+        CATCH_CHECK(t.now() == 5ms);
+    }
+
+    CATCH_SECTION("inside") {
+        n->start([&]() -> Task<> {
+            co_await t.sleep(1ms);
+            n->asyncClose([&]() noexcept { n.reset(); });
+        });
+        co_await t.sleep(2ms);
+    }
+
+    CATCH_CHECK(!n);
+}
+
 CORRAL_TEST_CASE("run-on-cancel") {
     co_await anyOf(t.sleep(2ms), untilCancelledAnd(t.sleep(1ms)));
     CATCH_CHECK(t.now() == 3ms);

@@ -38,3 +38,11 @@
 #define CORRAL_NOINLINE
 #define CORRAL_RETURN_ADDRESS() nullptr
 #endif
+
+
+// gcc doesn't support maybe_unused attribute on non-static member variables
+#if defined(__clang__) || defined(_MSC_VER)
+#define CORRAL_UNUSED_MEMBER [[maybe_unused]]
+#else
+#define CORRAL_UNUSED_MEMBER
+#endif

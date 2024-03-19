@@ -256,3 +256,47 @@ the nursery will be cancelled as well, and the joining task won't
 resume until all the cancelled tasks have exited. If you can't arrange
 to use `join()`, you will just need to be very careful about task
 lifetimes.
+
+Alternatively, one can `asyncClose()` a nursery. This function cancels
+any tasks in the nursery (including those yet to be started) like
+`cancel()` does, but also accepts a continuation callback, which will
+be invoked when the tasks complete and the nursery is safe to destroy
+(such destruction can happen from within the callback). This provides
+an option to implement asynchronous destruction of an object
+featuring UnsafeNursery if necessary:
+
+    class MyReader: public IReader { // see above
+        corral::UnsafeNursery nursery_;
+
+      public:
+        void asyncDestroy() {
+            nursery_.asyncClose([this]() noexcept { delete this; });
+        }
+    };
+
+`asyncDestroy()` may also be helpful if the object can be destroyed
+from within the completion callback of a regular operation, like
+`cb(result)` in the snippet above. Since the task calling the callback
+is currently running, it cannot be cancelled synchronously, so an attempt
+to delete `MyReader` from within such a callback would trigger the assert
+mentioned above. To accommodate a pattern like this, it's possible to
+heap-allocate the `UnsafeNursery` (in order to be able to decouple
+its lifetime from the lifetime of `MyReader`) and call `asyncClose()`
+from the destructor of `MyReader`:
+
+    class MyReader: public IReader { // see above
+        std::unique_ptr<corral::UnsafeNursery> nursery_;
+
+      public:
+        MyReader(boost::asio::io_service& io):
+            nursery_(std::make_unique<corral::UnsafeNursery>(io));
+
+        ~MyReader() {
+            auto n = nursery_.release();
+            n->asyncClose([n]() noexcept { delete n; })
+        }
+    };
+
+Note that in the latter case any tasks still running might retain a pointer
+to `MyReader` which is already destroyed; it's up to the user to guard
+against any use-after-free errors.

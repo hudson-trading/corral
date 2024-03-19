@@ -850,7 +850,32 @@ OutIter collectAsyncStackTrace(Handle h, OutIter out) {
     return out;
 }
 
+template <class Callable> class AsCoroutineHandle : public CoroutineFrame {
+  public:
+    AsCoroutineHandle(Callable c) : callable_(std::forward<Callable>(c)) {
+        this->resumeFn = +[](CoroutineFrame* f) noexcept {
+            auto self = static_cast<AsCoroutineHandle*>(f);
+            self->callable_();
+            delete self;
+        };
+    }
+
+  private:
+    [[no_unique_address]] Callable callable_;
+};
+
 } // namespace detail
+
+/// Returns a std::coroutine_handle<>, which, when resumed, will call the
+/// provided callable.
+template <class Callable>
+    requires(requires(Callable c) {
+        { c() } noexcept;
+    })
+Handle asCoroutineHandle(Callable&& c) {
+    return (new detail::AsCoroutineHandle<Callable>(std::forward<Callable>(c)))
+            ->toHandle();
+}
 
 template <class T>
 using Optional =

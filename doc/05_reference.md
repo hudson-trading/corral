@@ -153,6 +153,45 @@ A scope in which a dynamic number of child tasks can run.
   The nursery remains open until the task is cancelled, and `ptr` will be
   reset to null at that point.
 
+### UnsafeNursery
+
+```
+class UnsafeNursery: public Nursery {
+public:
+    explicit UnsafeNursery(EventLoop auto& eventLoop);
+    ~UnsafeNursery();
+
+    void close();
+    void asyncClose(std::invocable<> auto continuation);
+};
+```
+
+A variant of a `Nursery` for certain use cases (typically
+[bridging](04_callback_bridging.md) to callback-based code) when one
+cannot arrange to have all work be performed in a tree of async tasks
+rooted at `corral::run()`.
+
+* `UnsafeNursery(EventLoop auto& eventLoop)`
+  : Unlike a regular nursery, an `UnsafeNursery` can be defined as
+  a member variable of a class. Like `corral::run()`, it needs a reference
+  to the event loop that's being used to drive the tasks in the nursery.
+
+* `void close()`
+  : Cancels any tasks still running in the nursery. If any task cannot
+  be synchronously cancelled, triggers an assert.
+  After `close()` returns, submitting any further tasks to the nursery
+  is disallowed (doing so would trigger an assert).
+
+* `~UnsafeNursery()`
+  : Calls `close()` before destroying the nursery.
+
+* `void asyncClose(std::invocable<> auto continuation)`
+  : Cancels all tasks in the nursery. Once there are no tasks remaining,
+  closes the nursery (so no new tasks can be started) and invokes the given
+  continuation callback. The continuation callback may safely destroy the
+  nursery.
+
+
 ### CBPortal<Ts...>
 
 ```

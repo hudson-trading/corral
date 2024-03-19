@@ -177,7 +177,7 @@ class Nursery : private detail::TaskParent<void> {
 /// Usage of this class is generally discouraged because it requires
 /// a deep understanding of the nature of any tasks spawned directly or
 /// indirectly into this nursery.
-class UnsafeNursery : public Nursery, private Executor {
+class UnsafeNursery final : public Nursery, private Executor {
     class Awaitable;
 
   public:
@@ -216,6 +216,32 @@ class UnsafeNursery : public Nursery, private Executor {
         this->Executor::drain();
         assertEmpty();
         executor_ = nullptr;
+    }
+
+    /// Asynchronously closes the nursery.
+    /// Any tasks still running will be cancelled; the provided continuation
+    /// will be executed once the nursery becomes empty
+    /// (at which point it's safe to destroy).
+    ///
+    /// Note that the continuation will be immediately executed
+    /// (before asyncClose() returns) if the nursery is already empty.
+    void asyncClose(std::invocable<> auto continuation) {
+        CORRAL_ASSERT(parent_ == nullptr &&
+                      "nursery already joined or asyncClose()d");
+        if (tasks_.empty()) {
+            executor_ = nullptr;
+            continuation();
+        } else {
+            parent_ = asCoroutineHandle(
+                    [this, c = std::move(continuation)]() noexcept {
+                        if (exception_ != cancellationRequest()) {
+                            // terminate() on any exception
+                            std::rethrow_exception(exception_);
+                        }
+                        c();
+                    });
+            cancel();
+        }
     }
 
     void assertEmpty() {
