@@ -1,0 +1,122 @@
+name: Build and run tests
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  ci_linux:
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+
+      matrix:
+        variant:
+          - gcc
+          - clang
+          - gcc-arm32
+          - gcc-arm32-thumb
+          - gcc-aarch64
+          - msvc-wine
+
+        include:
+          - variant: gcc
+            deps: g++-12
+            cc: gcc-12
+            cxx: g++-12
+
+          - variant: clang
+            deps: clang-15
+            cc: clang-15
+            cxx: clang++-15
+
+          - variant: gcc-arm32
+            deps: g++-12-arm-linux-gnueabihf qemu-user-static
+            cc: arm-linux-gnueabihf-gcc-12
+            cxx: arm-linux-gnueabihf-g++-12
+            cxxflags: -static -marm -Wno-psabi
+            test_runner: qemu-arm-static
+
+          - variant: gcc-arm32-thumb
+            deps: g++-12-arm-linux-gnueabihf qemu-user-static
+            cc: arm-linux-gnueabihf-gcc-12
+            cxx: arm-linux-gnueabihf-g++-12
+            cxxflags: -static -mthumb -Wno-psabi
+            test_runner: qemu-arm-static
+
+          - variant: gcc-aarch64
+            deps: g++-12-aarch64-linux-gnu qemu-user-static
+            cc: aarch64-linux-gnu-gcc-12
+            cxx: aarch64-linux-gnu-g++-12
+            cxxflags: -static
+            test_runner: qemu-aarch64-static
+            
+          - variant: msvc-wine
+
+            # Note: windows workers are in short supply on github,
+            # so run this on linux with wine.
+            # (TODO: switch this to Docker to speed things up)
+            deps: >
+              wine64 wine64-preloader wine64-tools python3 msitools
+              python3-simplejson python3-six ca-certificates winbind
+              cmake{,-data}=3.22.1-1ubuntu1
+              
+            init: |
+              cd /usr/bin
+              sudo ln -sf ../lib/wine/wine64 .
+              wine64 wineboot --init
+              while pgrep wineserver > /dev/null; do sleep 1; done
+              sudo mkdir -p /opt
+              sudo git clone https://github.com/mstorsjo/msvc-wine /opt/msvc-wine
+              cd /opt/msvc-wine
+              sudo env PYTHONUNBUFFERED=1 ./vsdownload.py --accept-license --dest /opt/msvc
+              sudo ./install.sh /opt/msvc
+
+            cmake_flags: -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_LINKER=link -DCMAKE_CXX_FLAGS_DEBUG="/MT /Zi /Ob0 /Od /RTC1" -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+            env: PATH=/opt/msvc/bin/x64:$PATH
+            cc: cl
+            cxx: cl
+            cxxflags: /Iz:/opt/include /std:c++20 /bigobj /EHsc
+            test_runner: wine64
+            
+    steps:
+    - uses: actions/checkout@v3
+
+    # TODO: remove this after 24.04 releases to GA
+    - name: Bump to 24.04
+      run: |
+        cd /etc/apt && sed s/jammy/noble/ sources.list | sudo tee sources.list.d/noble.list >/dev/null
+        sudo apt-get -q -q update
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get -q -q update
+        sudo apt-get install -q -q -y git libboost1.83-dev ${{ matrix.deps }}
+        sudo mkdir -p /opt/include
+        sudo cp -r /usr/include/boost /opt/include
+
+    - name: Variant-specific init
+      run: ${{ matrix.init }}
+
+    - name: Configure
+      run: >
+        mkdir -p ${{ github.workspace }}/build 
+        && cd ${{ github.workspace }}/build 
+        && env ${{ matrix.env }} cmake
+        -DCMAKE_C_COMPILER=${{ matrix.cc }}
+        -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+        -DCMAKE_CXX_FLAGS="${{ matrix.cxxflags }}"
+        -DCORRAL_BOOST=/opt/include
+        -DCORRAL_CATCH2=https://github.com/catchorg/catch2
+        -DCORRAL_TEST_RUNNER=${{ matrix.test_runner }}
+        ${{ matrix.cmake_flags }}
+        ${{ github.workspace }}
+
+    - name: Build
+      run: cd ${{ github.workspace }}/build && env ${{ matrix.env }} make
+
+    - name: Test
+      run: cd ${{ github.workspace }}/build && env ${{ matrix.env }} ctest --output-on-failure
