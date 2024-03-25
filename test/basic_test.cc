@@ -334,6 +334,11 @@ CORRAL_TEST_CASE("anyof") {
         CATCH_CHECK(&*rx == &x);
         CATCH_CHECK(!s2);
     }
+
+    CATCH_SECTION("immediate-lambda") {
+        co_await anyOf(Ready{}, [&]() -> Task<> { co_await t.sleep(1ms); });
+        CATCH_CHECK(t.now() == 0ms);
+    }
 }
 
 CORRAL_TEST_CASE("mostof") {
@@ -392,6 +397,16 @@ CORRAL_TEST_CASE("allof") {
         co_await allOf(t.sleep(2ms), t.sleep(3ms),
                        [&]() -> Task<> { co_await t.sleep(5ms); });
         CATCH_CHECK(t.now() == 5ms);
+    }
+
+    CATCH_SECTION("immediate-front") {
+        co_await allOf(Ready{}, [&t]() -> Task<> { co_await t.sleep(1ms); });
+        CATCH_CHECK(t.now() == 1ms);
+    }
+
+    CATCH_SECTION("immediate-back") {
+        co_await allOf([&t]() -> Task<> { co_await t.sleep(1ms); }, Ready{});
+        CATCH_CHECK(t.now() == 1ms);
     }
 
     CATCH_SECTION("empty") {

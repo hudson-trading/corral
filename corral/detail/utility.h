@@ -237,10 +237,9 @@ struct AwaitableStateChecker : ProxyFrame {
                 break;
             case State::ReadyImmediately:
             case State::ReadyAfterCancel:
-                // Redundant readiness check is allowed as long as we haven't
-                // suspended yet (which hasExecutor is a proxy for) and
-                // we don't backtrack in readiness
-                CORRAL_ASSERT(!hasExecutor_ && val);
+                // Redundant readiness check is allowed as long as  we don't
+                // backtrack in readiness
+                CORRAL_ASSERT(val);
                 break;
             default:
                 CORRAL_ASSERT_UNREACHABLE();
@@ -268,7 +267,8 @@ struct AwaitableStateChecker : ProxyFrame {
     void aboutToSetExecutor() noexcept {
         CORRAL_ASSERT(
                 state_ == State::NotReady || state_ == State::CancelPending ||
-                state_ == State::Initial || state_ == State::InitialCxlPend);
+                state_ == State::ReadyImmediately || state_ == State::Initial ||
+                state_ == State::InitialCxlPend);
         hasExecutor_ = true;
     }
     Handle aboutToSuspend(Handle h) noexcept {
@@ -404,11 +404,7 @@ template <class Callable> class AwaitableLambda {
     bool await_ready() const noexcept { return false; }
 
     void await_set_executor(Executor* ex) noexcept {
-        if (!task_) {
-            task_ = callable_();
-            awaitable_ = task_.operator co_await();
-        }
-        awaitable_.await_set_executor(ex);
+        awaitable().await_set_executor(ex);
     }
     auto await_suspend(Handle h) { return awaitable_.await_suspend(h); }
     decltype(auto) await_resume() {
@@ -416,10 +412,7 @@ template <class Callable> class AwaitableLambda {
     }
 
     auto await_early_cancel() noexcept {
-        CORRAL_ASSERT(!task_);
-        task_ = callable_();
-        awaitable_ = task_.operator co_await();
-        return awaitable_.await_early_cancel();
+        return awaitable().await_early_cancel();
     }
     auto await_cancel(Handle h) noexcept { return awaitable_.await_cancel(h); }
     auto await_must_resume() const noexcept {
@@ -431,6 +424,15 @@ template <class Callable> class AwaitableLambda {
     }
 
   private:
+    AwaitableT& awaitable() {
+        if (!task_) {
+            task_ = callable_();
+            awaitable_ = task_.operator co_await();
+        }
+
+        return awaitable_;
+    }
+
     Callable callable_;
     TaskT task_;
     AwaitableT awaitable_;
