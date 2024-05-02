@@ -116,8 +116,6 @@ class Nursery : private detail::TaskParent<void> {
         requires(Awaitable<std::invoke_result_t<Callable, Args...>>)
     void start(Callable c, Args... args);
 
-    void start(Task<void> t) { doStart(std::move(t)); }
-
     /// Requests cancellation of all tasks.
     void cancel();
 
