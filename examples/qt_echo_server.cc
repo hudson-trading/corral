@@ -141,7 +141,7 @@ corral::Task<void> echoServer() {
             }
             QtUniquePtr<QTcpSocket> sock(server->nextPendingConnection());
             std::cerr << "new connection\n";
-            n.start(serve(std::move(sock)));
+            n.start(&serve, std::move(sock));
         }
     };
 }

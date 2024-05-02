@@ -9,8 +9,8 @@
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
 //
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
 //
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -60,7 +60,7 @@ corral::Task<void> echo_server(boost::asio::io_context& io_context,
             tcp::socket sock = co_await acceptor.async_accept(
                     io_context, corral::asio_awaitable);
             std::cerr << "new connection accepted\n";
-            nursery.start(serve(std::move(sock)));
+            nursery.start(serve, std::move(sock));
         }
     };
 }

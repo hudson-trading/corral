@@ -196,8 +196,8 @@ this requires some special syntax that uses a macro:
 
     corral::Task<void> foo() {
         CORRAL_WITH_NURSERY(n) {
-            n.start(async_hello());
-            n.start(wrap_hello());
+            n.start(async_hello);
+            n.start(wrap_hello);
             co_return corral::join;
         };
     }
@@ -217,7 +217,7 @@ you're going to run, such as when writing a server's `accept()` loop:
             while (true) {
                 tcp::socket sock = co_await
                     acc.async_accept(io_context, corral::asio_awaitable);
-                n.start(serve(std::move(sock)));
+                n.start(serve, std::move(sock));
             }
         };
     }
@@ -227,22 +227,27 @@ it must return either `corral::join` or `corral::cancel`. `join` causes
 the nursery to wait until all of its other tasks have completed normally,
 while `cancel` will make it hurry them along by requesting their cancellation.
 
-When using a nursery, be careful with the lifetime of variables
-defined within the nursery block, as they will be destroyed _before_
-the tasks spawned into the nursery complete. For example, this
-code has a use-after-free bug:
+`Nursery::start()` accepts a callable which would produce an awaitable,
+and arguments to it. Both are accepted by value, so any references passed
+to `start()` will be copied into a temporary wrapper task, which ensures their
+lifetime is extended until completion of the task. This allows async functions
+to accept their arguments by reference. Passing arguments by reference
+is possible, but has to be requested explicitly through wrapping
+the reference into `std::ref` (or `std::cref` for a constant reference):
 
-    corral::Task<void> print(const std::string& msg);
-    CORRAL_WITH_NURSERY(n) {
-        std::string s = "hello";
-        n.start(print(s));
-        co_return corral::join;
-        // `s` is destroyed here, but `print()` is still running
-    };
+    corral::Task<void> foo(int&);
+    corral::Task<void> bar() {
+        int x = 0;
+        CORRAL_WITH_NURSERY() {
+            for (int i = 0; i != 10; ++i) {
+                n.start(foo, std::ref(x));
+            }
+            co_return corral::join;
+        };
+    }
 
-Generally it's safer to pass things to async functions by value. If you
-want something to live long enough for all tasks in the nursery, it should
-be defined _outside_ the nursery block.
+Generally only things defined _outside_ the nursery block can safely
+be wrapped into `std::ref()` when passing to `Nursery::start()`.
 
 ## The task tree
 
@@ -286,7 +291,7 @@ tree". The tree structure gives us several useful properties:
   corral::Task<void> foo() {
       std::ifstream ifs("/etc/passwd");
       co_await publishOnFacebook(ifs);
-  
+
       // publishOnFacebook() is guaranteed to be done with ifs,
       // so it can be safely closed here
   }

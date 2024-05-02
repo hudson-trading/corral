@@ -866,6 +866,23 @@ template <class Callable> class AsCoroutineHandle : public CoroutineFrame {
     [[no_unique_address]] Callable callable_;
 };
 
+/// Has member field `value` that resolves to `true` if T is a template
+/// instantiation of Template, and `false` otherwise.
+template <template <typename...> typename Template, typename T>
+struct is_specialization_of : std::false_type {};
+
+template <template <typename...> typename Template, typename... Args>
+struct is_specialization_of<Template, Template<Args...>> : std::true_type {};
+
+template <template <typename...> typename Template, typename T>
+constexpr inline bool is_specialization_of_v =
+        is_specialization_of<Template, T>::value;
+
+template <typename T>
+constexpr bool is_reference_wrapper_v =
+        is_specialization_of_v<std::reference_wrapper, T>;
+
+
 } // namespace detail
 
 /// Returns a std::coroutine_handle<>, which, when resumed, will call the

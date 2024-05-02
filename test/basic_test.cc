@@ -864,15 +864,42 @@ CORRAL_TEST_CASE("nursery") {
         ++count;
     };
     CORRAL_WITH_NURSERY(n) {
-        n.start(incrementAfter(2ms));
-        n.start(incrementAfter(3ms));
-        n.start(incrementAfter(5ms));
+        n.start(incrementAfter, 2ms);
+        n.start(incrementAfter, 3ms);
+        n.start(incrementAfter, 5ms);
 
         co_await t.sleep(4ms);
         CATCH_CHECK(count == 2);
 
         co_await t.sleep(2ms);
         CATCH_CHECK(count == 3);
+
+        co_return join;
+    };
+}
+
+CORRAL_TEST_CASE("nursery-extended-lifetime") {
+    auto func = [&](const std::string& s) -> Task<void> {
+        co_await t.sleep(1ms);
+        CATCH_CHECK(s == "hello world! I am a long(ish) string.");
+    };
+
+    const std::string ext = "hello world! I am a long(ish) string.";
+
+    CORRAL_WITH_NURSERY(n) {
+        CATCH_SECTION("implicit-construction") {
+            n.start(func, "hello world! I am a long(ish) string.");
+        }
+
+        CATCH_SECTION("existing-object") {
+            const std::string str = "hello world! I am a long(ish) string.";
+            n.start(func, str);
+        }
+
+        CATCH_SECTION("by-reference") {
+            // Passing a string defined outside the nursery block by reference
+            n.start(func, std::cref(ext));
+        }
 
         co_return join;
     };
@@ -885,7 +912,7 @@ CORRAL_TEST_CASE("nursery-ret-policy") {
 
     CATCH_SECTION("join") {
         CORRAL_WITH_NURSERY(n) {
-            n.start(sleep(5ms));
+            n.start(sleep, 5ms);
             co_return join;
         };
         CATCH_CHECK(t.now() == 5ms);
@@ -893,7 +920,7 @@ CORRAL_TEST_CASE("nursery-ret-policy") {
 
     CATCH_SECTION("cancel") {
         CORRAL_WITH_NURSERY(n) {
-            n.start(sleep(5ms));
+            n.start(sleep, 5ms);
             co_return cancel;
         };
         CATCH_CHECK(t.now() == 0ms);
@@ -950,9 +977,9 @@ CORRAL_TEST_CASE("nursery-multi-cancel") {
         n.cancel();
     };
     CORRAL_WITH_NURSERY(n) {
-        n.start(task(n));
-        n.start(task(n));
-        n.start(task(n));
+        n.start(task, std::ref(n));
+        n.start(task, std::ref(n));
+        n.start(task, std::ref(n));
         co_return join;
     };
 }
@@ -964,9 +991,9 @@ CORRAL_TEST_CASE("nursery-multi-exception") {
     };
     try {
         CORRAL_WITH_NURSERY(n) {
-            n.start(task(n));
-            n.start(task(n));
-            n.start(task(n));
+            n.start(task, std::ref(n));
+            n.start(task, std::ref(n));
+            n.start(task, std::ref(n));
             co_return join;
         };
     } catch (std::runtime_error&) {}
@@ -1016,8 +1043,8 @@ CORRAL_TEST_CASE("nursery-exception") {
 
     CATCH_CHECK_THROWS_WITH(
             CORRAL_WITH_NURSERY(n) {
-                n.start(t1());
-                n.start(t2());
+                n.start(t1);
+                n.start(t2);
                 co_return join;
             },
             Catch::Equals("boo!"));
@@ -1091,7 +1118,7 @@ CORRAL_TEST_CASE("semaphores") {
     };
     CORRAL_WITH_NURSERY(nursery) {
         for (int i = 0; i != 20; ++i) {
-            nursery.start(worker());
+            nursery.start(worker);
         }
         co_return join;
     };
@@ -1157,7 +1184,8 @@ CORRAL_TEST_CASE("executor") {
     };
 
     CORRAL_WITH_NURSERY(n) {
-        n.start(inner());
+        n.start(inner);
+        co_await t.sleep(1ms);
 
         evt.trigger();
         CATCH_CHECK(!innerInvoked);
@@ -1544,8 +1572,8 @@ CORRAL_TEST_CASE("bounded-channel") {
             };
 
             // These should remain blocked
-            nursery.start(send(4));
-            nursery.start(send(5));
+            nursery.start(send, 4);
+            nursery.start(send, 5);
 
             co_await yield;
 

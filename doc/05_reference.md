@@ -99,8 +99,7 @@ class Nursery {
     Nursery();
     Nursery(Nursery&&);
   public:
-    void start(Task<void>);
-    void start(Awaitable<void> auto&&);
+    void start(auto callable, auto... args);
 
     void cancel();
 
@@ -124,15 +123,14 @@ A scope in which a dynamic number of child tasks can run.
   patiently for all tasks that were started in it to exit; `cancel` will
   cancel them instead (but still wait for them to exit in response).
 
-* `void Nursery::start(Task<void>)`
-  : Start a task in the nursery. It will not actually start executing until
-  the next `co_await` point is reached.
-
-* `void Nursery::start(Awaitable<void> auto&&)`
-  : Overload of `start()` for other awaitable types, which wraps the awaitable
-  in an async function and ensures that the awaitable lives as long as the
-  resulting task does. Typical use case: passing an async lambda (without
-  the parentheses) in order to run a task with captures.
+* `void Nursery::start(auto callable, auto... args)`
+  : Start `std::invoke(callable, args...)` (which must yield an awaitable)
+  in the nursery. It will not actually start executing until the next
+  `co_await` point is reached. The callable and its arguments will be moved
+  into storage that remains valid until the task completes. `std::ref()` and
+  `std::cref()` may be used to pass arguments by reference, if the caller
+  takes responsibility for the referents' lifetimes; generally only objects
+  defined outside the nursery block can safely be passed by reference.
 
 * `void Nursery::cancel()`
   : Request cancellation of all tasks in the nursery, including those that

@@ -9,8 +9,8 @@
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
 //
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
 //
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -96,10 +96,10 @@ corral::Task<void> http_download(
 
             for (size_t bound = chunkSize; bound < totalSize;
                  bound += chunkSize) {
-                nursery.start(http_download(
-                        io_service, url, out,
-                        std::make_pair(bound, std::min(chunkSize,
-                                                       totalSize - bound))));
+                nursery.start(
+                        http_download, std::ref(io_service), url, std::ref(out),
+                        std::make_pair(bound,
+                                       std::min(chunkSize, totalSize - bound)));
                 ofs = bound;
             }
 

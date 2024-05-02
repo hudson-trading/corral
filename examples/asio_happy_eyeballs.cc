@@ -88,7 +88,7 @@ corral::Task<std::optional<tcp::socket>> happy_eyeballs_connect(
         };
 
         for (const auto& endpoint : endpoints) {
-            nursery.start(try_connect(remaining++, endpoint));
+            nursery.start(try_connect, remaining++, endpoint);
         }
 
         CORRAL_SUSPEND_FOREVER(); // keep `try_connect` lambda in scope

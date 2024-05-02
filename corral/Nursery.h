@@ -23,6 +23,7 @@
 // SPDX-License-Identifier: MIT
 
 #pragma once
+#include <functional>
 #include <variant>
 #include <vector>
 
@@ -105,14 +106,17 @@ class Nursery : private detail::TaskParent<void> {
 
     size_t taskCount() const noexcept { return taskCount_; }
 
-    /// Starts a task in the nursery.
-    void start(Task<void> t) { addTask(std::move(t), this).resume(); }
+    /// Starts a task in the nursery that runs
+    /// `co_await std::invoke(c, args...)`.
+    /// The callable and its arguments will be moved into storage that
+    /// lives as long as the new task does. You can wrap arguments in
+    /// `std::ref()` or `std::cref()` if you want to actually pass by
+    /// reference; be careful that the referent will live long enough.
+    template <class Callable, class... Args>
+        requires(Awaitable<std::invoke_result_t<Callable, Args...>>)
+    void start(Callable c, Args... args);
 
-    /// Overload of start() for other awaitable types, most typically used
-    /// for async lambdas that haven't been invoked yet. The awaitable
-    /// will be wrapped in a new async function invocation which will keep
-    /// it alive for the lifetime of the task.
-    template <Awaitable<void> Aw> void start(Aw&& aw);
+    void start(Task<void> t) { doStart(std::move(t)); }
 
     /// Requests cancellation of all tasks.
     void cancel();
@@ -128,6 +132,8 @@ class Nursery : private detail::TaskParent<void> {
 
     Nursery() = default;
     Nursery(Nursery&&) = default;
+
+    void doStart(Task<void> t) { addTask(std::move(t), this).resume(); }
 
     void rethrowException();
     static std::exception_ptr cancellationRequest();
@@ -321,23 +327,46 @@ inline Handle Nursery::addTask(Task<Ret> task, TaskParent<Ret>* parent) {
     return promise->start(parent, parent_);
 }
 
-template <Awaitable<void> Aw> void Nursery::start(Aw&& aw) {
-    if constexpr ((std::is_reference_v<Aw> &&
-                   std::is_invocable_r_v<Task<>, Aw>) ||
-                  std::is_convertible_v<Aw, Task<> (*)()>) {
+template <class Callable, class... Args>
+    requires(Awaitable<std::invoke_result_t<Callable, Args...>>)
+void Nursery::start(Callable callable, Args... args) {
+    if constexpr ((std::is_reference_v<Callable> &&
+                   std::is_invocable_r_v<Task<>, Callable>) ||
+                  std::is_convertible_v<Callable, Task<> (*)()>) {
         // The awaitable is an async lambda (lambda that produces a Task<>)
-        // and it either was passed by lvalue reference or it is stateless.
-        // In either case, we don't have to worry about the lifetime of its
+        // and it either was passed by lvalue reference or it is stateless,
+        // and no arguments were supplied.
+        // In this case, we don't have to worry about the lifetime of its
         // captures, and can thus save an allocation here.
-        start(aw());
+        doStart(callable());
     } else {
         // The lambda has captures, or we're working with a different
         // awaitable type, so wrap it into another async function.
         // The contents of the awaitable object (such as the lambda
         // captures) will be kept alive as an argument of the new
         // async function.
-        auto wrapper = [](Aw awaitable) -> Task<> { co_await awaitable; };
-        start(wrapper(std::forward<Aw>(aw)));
+
+        // Note: cannot use `std::invoke()` here, as any temporaries
+        // created inside it will be destroyed before `invoke()` returns.
+        // We need funciton call and `co_await` inside one statement,
+        // so mimic `std::invoke()` logic here.
+        if constexpr (std::is_member_pointer_v<Callable>) {
+            doStart([](Callable c, auto obj, auto... a) -> Task<> {
+                co_await (obj->*c)(std::move(a)...);
+                if constexpr (std::is_pointer_v<decltype(obj)>) {
+                    co_await (obj->*c)(std::move(a)...);
+                } else if constexpr (detail::is_reference_wrapper_v<
+                                             decltype(obj)>) {
+                    co_await (obj.get().*c)(std::move(a)...);
+                } else {
+                    co_await (std::move(obj).*c)(std::move(a)...);
+                }
+            }(std::move(callable), std::move(args)...));
+        } else {
+            doStart([](Callable c, Args... a) -> Task<> {
+                co_await (std::move(c))(std::move(a)...);
+            }(std::move(callable), std::move(args)...));
+        }
     }
 }
 
