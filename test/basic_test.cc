@@ -905,6 +905,36 @@ CORRAL_TEST_CASE("nursery-extended-lifetime") {
     };
 }
 
+CORRAL_TEST_CASE("nursery-member-function") {
+    struct Test {
+        int x = 42;
+        Task<void> func(TestEventLoop& tt, int expected) {
+            co_await tt.sleep(1ms);
+            CATCH_CHECK(x == expected);
+        }
+    };
+
+    Test obj;
+    CORRAL_WITH_NURSERY(n) {
+        CATCH_SECTION("ptr") {
+            n.start(&Test::func, &obj, std::ref(t), 43);
+            obj.x = 43;
+        }
+        CATCH_SECTION("ref") {
+            n.start(&Test::func, std::ref(obj), std::ref(t), 43);
+            obj.x = 43;
+        }
+        CATCH_SECTION("val") {
+            // `this` passed by value, so subsequent changes to `obj`
+            // should not be visible by the spawned task
+            n.start(&Test::func, obj, std::ref(t), 42);
+            obj.x = 43;
+        }
+        co_return join;
+    };
+    CATCH_CHECK(t.now() == 1ms);
+}
+
 CORRAL_TEST_CASE("nursery-ret-policy") {
     auto sleep = [&](milliseconds delay) -> Task<void> {
         co_await t.sleep(delay);

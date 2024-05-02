@@ -352,7 +352,6 @@ void Nursery::start(Callable callable, Args... args) {
         // so mimic `std::invoke()` logic here.
         if constexpr (std::is_member_pointer_v<Callable>) {
             doStart([](Callable c, auto obj, auto... a) -> Task<> {
-                co_await (obj->*c)(std::move(a)...);
                 if constexpr (std::is_pointer_v<decltype(obj)>) {
                     co_await (obj->*c)(std::move(a)...);
                 } else if constexpr (detail::is_reference_wrapper_v<
