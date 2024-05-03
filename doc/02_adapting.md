@@ -264,45 +264,51 @@ Let us suppose we have an asynchronous function for reading
 from a socket, which invokes a provided callback when the operation
 completes (sometimes called "continuation-passing style" or CPS):
 
-    void async_read(int fd, void* buf, size_t len,
-                    std::function<void(ssize_t)> cb);
+```cpp
+void async_read(int fd, void* buf, size_t len,
+                std::function<void(ssize_t)> cb);
+```
 
 We can wrap it into a corral awaitable like this:
 
-    class AsyncRead {
-        int fd_;       // A copy of the arguments
-        void* buf_;
-        size_t len_;
-        ssize_t result_;
+```cpp
+class AsyncRead {
+    int fd_;       // A copy of the arguments
+    void* buf_;
+    size_t len_;
+    ssize_t result_;
 
-      public:
-        AsyncRead(int fd, void* buf, size_t len):
-            fd_(fd), buf_(buf), len_(len) {}
+  public:
+    AsyncRead(int fd, void* buf, size_t len):
+        fd_(fd), buf_(buf), len_(len) {}
 
-        bool await_ready() const noexcept { return false; }
+    bool await_ready() const noexcept { return false; }
 
-        void await_suspend(std::coroutine_handle<> handle) {
-            async_read(fd_, buf_, len_, [handle, this](ssize_t result) {
-                 result_ = result;
-                 handle.resume();
-            });
-        }
+    void await_suspend(std::coroutine_handle<> handle) {
+        async_read(fd_, buf_, len_, [handle, this](ssize_t result) {
+             result_ = result;
+             handle.resume();
+        });
+    }
 
-        ssize_t await_resume() const { return result_; }
-    };
+    ssize_t await_resume() const { return result_; }
+};
+```
 
 Now we can use it, for example, like this:
 
-    corral::Task<void> my_read_all(int fd) {
-        std::array<char, 1024> buf;
-        while (true) {
-            ssize_t len = co_await AsyncRead(fd, buf.data(), buf.size());
+```cpp
+corral::Task<void> my_read_all(int fd) {
+    std::array<char, 1024> buf;
+    while (true) {
+        ssize_t len = co_await AsyncRead(fd, buf.data(), buf.size());
 
-            if (len > 0) { /* use buf[0..len] somehow */ }
-            else if (len == 0) co_return; // EOF
-            else throw std::runtime_error(strerror(errno));
-        }
+        if (len > 0) { /* use buf[0..len] somehow */ }
+        else if (len == 0) co_return; // EOF
+        else throw std::runtime_error(strerror(errno));
     }
+}
+```
 
 Note that this awaitable is not cancellable, because there is no mechanism
 provided to cancel the underlying operation we're trying to wrap. We can't
@@ -318,28 +324,30 @@ wrap *does* provide a cancellation capability, by having
 `async_cancel_read()` function. We can use it to make our awaitable
 cancellable like so:
 
-    void* async_read(int fd, void* buf, size_t len,
-                     std::function<void(ssize_t)> cb);
-    void async_cancel_read(void*);
+```cpp
+void* async_read(int fd, void* buf, size_t len,
+                 std::function<void(ssize_t)> cb);
+void async_cancel_read(void*);
 
-    class AsyncRead {
-        // in addition to the above:
+class AsyncRead {
+    // in addition to the above:
 
-        void* read_handle_;
+    void* read_handle_;
 
-      public:
-        void await_suspend(std::coroutine_handle<> handle) {
-            read_handle_ = async_read(fd_, buf_, len_, [handle, this](ssize_t result) {
-                 result_ = result;
-                 handle.resume();
-            });
-        }
+  public:
+    void await_suspend(std::coroutine_handle<> handle) {
+        read_handle_ = async_read(fd_, buf_, len_, [handle, this](ssize_t result) {
+             result_ = result;
+             handle.resume();
+        });
+    }
 
-        auto await_cancel(std::coroutine_handle<> handle) noexcept {
-            async_cancel_read(read_handle_);
-            return std::true_type{};
-        }
-    };
+    auto await_cancel(std::coroutine_handle<> handle) noexcept {
+        async_cancel_read(read_handle_);
+        return std::true_type{};
+    }
+};
+```
 
 In this first cancellation example, we assumed that
 `async_cancel_read()` would _immediately guarantee_ that the
@@ -354,33 +362,34 @@ anything immediately, but causes the callback to later be invoked with
 preventing the read from completing. We would adapt that to corral
 like so:
 
-    void* async_read(int fd, void* buf, size_t len,
-                     std::function<void(ssize_t)> cb);
-    void async_try_cancel_read(void*);
+```cpp
+void* async_read(int fd, void* buf, size_t len,
+                 std::function<void(ssize_t)> cb);
+void async_try_cancel_read(void*);
 
-    class AsyncRead {
-        // in addition to the above:
+class AsyncRead {
+    // in addition to the above:
 
-        void* read_handle_;
+    void* read_handle_;
 
-      public:
-        void await_suspend(std::coroutine_handle<> handle) {
-            read_handle_ = async_read(fd_, buf_, len_, [handle, this](ssize_t result) {
-                 result_ = result;
-                 handle.resume();
-            });
-        }
+  public:
+    void await_suspend(std::coroutine_handle<> handle) {
+        read_handle_ = async_read(fd_, buf_, len_, [handle, this](ssize_t result) {
+             result_ = result;
+             handle.resume();
+        });
+    }
 
-        bool await_cancel(std::coroutine_handle<> handle) noexcept {
-            async_try_cancel_read(read_handle_);
-            return false;
-        }
+    bool await_cancel(std::coroutine_handle<> handle) noexcept {
+        async_try_cancel_read(read_handle_);
+        return false;
+    }
 
-        bool await_must_resume() const noexcept {
-            return result_ != -ECANCELED;
-        }
-    };
-
+    bool await_must_resume() const noexcept {
+        return result_ != -ECANCELED;
+    }
+};
+```
 
 ### Example: wrapping a signal/slot interaction
 
@@ -399,47 +408,51 @@ Qt signal arrives.
 (Certain details in the example below have been omitted for simplicity;
 `examples/qt_echo_server.cc` has the full working version.)
 
-    template<class Obj>
-    class QtSignalAwaitable {
-        Obj* obj_;
-        void (Obj::*signal_)();
-        QMetaObject::Connection conn_;
+```cpp
+template<class Obj>
+class QtSignalAwaitable {
+    Obj* obj_;
+    void (Obj::*signal_)();
+    QMetaObject::Connection conn_;
 
-      public:
-        QtSignalAwaitable(Obj* obj, void (Obj::*signal)()):
-            obj_(obj), signal_(signal) {}
+  public:
+    QtSignalAwaitable(Obj* obj, void (Obj::*signal)()):
+        obj_(obj), signal_(signal) {}
 
-        bool await_ready() const noexcept { return false; }
-        void await_suspend(std::coroutine_handle<> h) {
-            conn_ = QObject::connect(obj_, signal_, [this, h] {
-                QObject::disconnect(conn_); // only resume the waiting task once
-                h.resume();
-            });
-        }
-        void await_resume() { /*no value*/ }
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) {
+        conn_ = QObject::connect(obj_, signal_, [this, h] {
+            QObject::disconnect(conn_); // only resume the waiting task once
+            h.resume();
+        });
+    }
+    void await_resume() { /*no value*/ }
 
-        auto await_cancel(std::coroutine_handle<> h) {
-            QObject::disconnect(conn_);
-            return std::true_type{};
-        }
-    };
+    auto await_cancel(std::coroutine_handle<> h) {
+        QObject::disconnect(conn_);
+        return std::true_type{};
+    }
+};
+```
 
 Now we can use it like this:
 
-    corral::Task<void> my_read_all(QTcpSocket& sock) {
-        std::array<char, 1024> buf;
-        while (true) {
-            size_t avail;
-            while ((avail = sock.bytesAvailable()) == 0)
-                co_await QtSignalAwaitable(&sock, &QTcpSocket::readyRead);
+```cpp
+corral::Task<void> my_read_all(QTcpSocket& sock) {
+    std::array<char, 1024> buf;
+    while (true) {
+        size_t avail;
+        while ((avail = sock.bytesAvailable()) == 0)
+            co_await QtSignalAwaitable(&sock, &QTcpSocket::readyRead);
 
-            ssize_t len = sock.read(buf.data(), min(buf.size(), avail));
+        ssize_t len = sock.read(buf.data(), min(buf.size(), avail));
 
-            if (len > 0) { /* use buf[0..len] somehow */ }
-            else if (len == 0) co_return; // EOF
-            else throw std::runtime_error(sock.errorString().toStdString());
-        }
+        if (len > 0) { /* use buf[0..len] somehow */ }
+        else if (len == 0) co_return; // EOF
+        else throw std::runtime_error(sock.errorString().toStdString());
     }
+}
+```
 
 Note that since signals are naturally edge-triggered, we cannot unconditionally
 wait on `readyRead`, because it might not be emitted if the socket is _already_
@@ -448,9 +461,11 @@ ready to read.
 With this machinery, for example, we can run a task that is cancellable
 by a GUI button press:
 
-    co_await corral::anyOf(
-        longRunningTask(),
-        QtSignalAwaitable(cancelButton, &QPushButton::clicked));
+```cpp
+co_await corral::anyOf(
+    longRunningTask(),
+    QtSignalAwaitable(cancelButton, &QPushButton::clicked));
+```
 
 ## Adapting an event loop
 
@@ -469,41 +484,45 @@ event loop type.
 For example, if we're running under Qt, whose `QApplication` exposes
 `exec()` and `exit()` methods, we can write:
 
-    namespace corral {
-    template<>
-    struct EventLoopTraits<QApplication> {
-        static void run(QApplication& app) { app.exec(); }
-        static void stop(QApplication& app) { app.exit(); }
+```cpp
+namespace corral {
+template<>
+struct EventLoopTraits<QApplication> {
+    static void run(QApplication& app) { app.exec(); }
+    static void stop(QApplication& app) { app.exit(); }
 
-        // Only used for asserting against nested run() on the same event
-        // loop, which is not supported. It's OK to provide a no-op definition
-        // if you promise not to try to do nested run()s.
-        static bool isRunning(QApplication& app) noexcept { return false; }
+    // Only used for asserting against nested run() on the same event
+    // loop, which is not supported. It's OK to provide a no-op definition
+    // if you promise not to try to do nested run()s.
+    static bool isRunning(QApplication& app) noexcept { return false; }
 
-        // Return a value identifying the event loop. This is used to tell whether
-        // two executors are running in the same environment or whether one
-        // is nested in the other; the latter would occur if you call a
-        // synchronous function that secretly uses corral::run() (with its
-        // own separate event loop) internally. You can use the address
-        // of the event loop object as its ID unless you have a situation where the
-        // same underlying event loop can be accessed via multiple objects.
-        static EventLoopID eventLoopID(QApplication& app) { return EventLoopID(&app); }
-    };
-    }
+    // Return a value identifying the event loop. This is used to tell whether
+    // two executors are running in the same environment or whether one
+    // is nested in the other; the latter would occur if you call a
+    // synchronous function that secretly uses corral::run() (with its
+    // own separate event loop) internally. You can use the address
+    // of the event loop object as its ID unless you have a situation where the
+    // same underlying event loop can be accessed via multiple objects.
+    static EventLoopID eventLoopID(QApplication& app) { return EventLoopID(&app); }
+};
+}
+```
 
 Now we can run async tasks and use Qt event loop to deliver events
 to them:
 
-    corral::Task<int> asyncMain() {
-        // spawn more tasks
-        // wait on Qt signals
-        // do awesome things
-    }
+```cpp
+corral::Task<int> asyncMain() {
+    // spawn more tasks
+    // wait on Qt signals
+    // do awesome things
+}
 
-    int main(int argc, char** argv) {
-        QApplication app(argc, argv);
-        return corral::run(app, asyncMain());
-    }
+int main(int argc, char** argv) {
+    QApplication app(argc, argv);
+    return corral::run(app, asyncMain());
+}
+```
 
 In addition to the `EventLoopTraits`, you will want to define some awaitables
 that wrap your event loop's operations, such as performing I/O or waiting

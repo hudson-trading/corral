@@ -25,12 +25,14 @@ distinguish them from async functions.)
 
 Here's our first async function, not that complicated or interesting yet:
 
-    boost::asio::io_service io_service;
-    corral::Task<void> async_hello() {
-        std::cout << "getting ready..." << std::endl;
-        co_await corral::sleepFor(io_service, 100ms);
-        std::cout << "Hello, world!" << std::endl;
-    }
+```cpp
+boost::asio::io_service io_service;
+corral::Task<void> async_hello() {
+    std::cout << "getting ready..." << std::endl;
+    co_await corral::sleepFor(io_service, 100ms);
+    std::cout << "Hello, world!" << std::endl;
+}
+```
 
 Things which can appear to the right of the `co_await` keyword are
 called _awaitables_, and each one has an associated result type, which
@@ -40,11 +42,13 @@ handle `Task<T>` returned when you write a call to an async function
 is itself awaitable, which allows you to call one async function from
 another:
 
-    corral::Task<void> wrap_hello() {
-        std::cout << "Going to greet world" << std::endl;
-        co_await async_hello();
-        std::cout << "Greeted the world!" << std::endl;
-    }
+```cpp
+corral::Task<void> wrap_hello() {
+    std::cout << "Going to greet world" << std::endl;
+    co_await async_hello();
+    std::cout << "Greeted the world!" << std::endl;
+}
+```
 
 OK, great... but how do we actually run these things?
 
@@ -64,9 +68,11 @@ an async function without `co_await`), and runs the event loop until
 the task represented by the awaitable completes. So to run the
 `wrap_hello()` function we defined above, we might write:
 
-    int main() {
-        corral::run(io_service, wrap_hello());
-    }
+```cpp
+int main() {
+    corral::run(io_service, wrap_hello());
+}
+```
 
 "Great," you might be saying. "What's the point?"
 
@@ -77,13 +83,15 @@ things at the same time*, with less overhead and less programming
 complexity than many other ways of doing multiple things at the same time.
 So let's try an example that runs two async functions in parallel:
 
-    corral::Task<void> hello_twice() {
-        std::cout << "Going to greet the world twice" << std::endl;
-        co_await async::allOf(async_hello(), async_hello());
-    }
-    int main() {
-        corral::run(io_service, hello_twice());
-    }
+```cpp
+corral::Task<void> hello_twice() {
+    std::cout << "Going to greet the world twice" << std::endl;
+    co_await async::allOf(async_hello(), async_hello());
+}
+int main() {
+    corral::run(io_service, hello_twice());
+}
+```
 
 This outputs:
 
@@ -152,13 +160,13 @@ care about the first one that finishes, `anyOf()` can be used to implement
 several different cancellation models:
 
 * Attaching a timeout to a potentially long operation:
-  ```
+  ```cpp
   co_await corral::anyOf(somethingLong(),
                          corral::sleepFor(io_service, 3s));
   ```
 
 * Attaching a `corral::Event` to make something externally cancellable:
-  ```
+  ```cpp
   corral::Event cancelEvent;
   co_await corral::anyOf(somethingLong(),
                          cancelEvent);
@@ -194,33 +202,39 @@ indirectly) spawn additional tasks into the nursery by calling the
 Due to C++'s lack of support for writing destructors as async functions,
 this requires some special syntax that uses a macro:
 
-    corral::Task<void> foo() {
-        CORRAL_WITH_NURSERY(n) {
-            n.start(async_hello);
-            n.start(wrap_hello);
-            co_return corral::join;
-        };
-    }
+```cpp
+corral::Task<void> foo() {
+    CORRAL_WITH_NURSERY(n) {
+        n.start(async_hello);
+        n.start(wrap_hello);
+        co_return corral::join;
+    };
+}
+```
 
 Of course, this example could more easily be written as:
 
-    corral::Task<void> foo() {
-        co_return co_await corral::allOf(async_hello(), wrap_hello());
-    }
+```cpp
+corral::Task<void> foo() {
+    co_return co_await corral::allOf(async_hello(), wrap_hello());
+}
+```
 
 But the nursery structure shines when you don't know how many tasks
 you're going to run, such as when writing a server's `accept()` loop:
 
-    corral::Task<void> serve(tcp::socket&);
-    corral::Task<void> acceptorLoop(tcp::acceptor& acc) {
-        CORRAL_WITH_NURSERY(n) {
-            while (true) {
-                tcp::socket sock = co_await
-                    acc.async_accept(io_context, corral::asio_awaitable);
-                n.start(serve, std::move(sock));
-            }
-        };
-    }
+```cpp
+corral::Task<void> serve(tcp::socket&);
+corral::Task<void> acceptorLoop(tcp::acceptor& acc) {
+    CORRAL_WITH_NURSERY(n) {
+        while (true) {
+            tcp::socket sock = co_await
+                acc.async_accept(io_context, corral::asio_awaitable);
+            n.start(serve, std::move(sock));
+        }
+    };
+}
+```
 
 If the body of the nursery terminates (rather than looping forever),
 it must return either `corral::join` or `corral::cancel`. `join` causes
@@ -235,16 +249,18 @@ to accept their arguments by reference. Passing arguments by reference
 is possible, but has to be requested explicitly through wrapping
 the reference into `std::ref` (or `std::cref` for a constant reference):
 
-    corral::Task<void> foo(int&);
-    corral::Task<void> bar() {
-        int x = 0;
-        CORRAL_WITH_NURSERY() {
-            for (int i = 0; i != 10; ++i) {
-                n.start(foo, std::ref(x));
-            }
-            co_return corral::join;
-        };
-    }
+```cpp
+corral::Task<void> foo(int&);
+corral::Task<void> bar() {
+    int x = 0;
+    CORRAL_WITH_NURSERY() {
+        for (int i = 0; i != 10; ++i) {
+            n.start(foo, std::ref(x));
+        }
+        co_return corral::join;
+    };
+}
+```
 
 Generally only things defined _outside_ the nursery block can safely
 be wrapped into `std::ref()` when passing to `Nursery::start()`.
@@ -287,7 +303,7 @@ tree". The tree structure gives us several useful properties:
   for as long as any of the children are still alive.)
 
 * C++ scopes and destructors work as expected:
-  ```
+  ```cpp
   corral::Task<void> foo() {
       std::ifstream ifs("/etc/passwd");
       co_await publishOnFacebook(ifs);
@@ -379,17 +395,19 @@ making it infeasible to use RAII. For such cases, corral provides an
 the wrapper is cancelled and doesn't confirm the cancellation until
 the child completes. Typically it would be used via `anyOf()`:
 
-    struct AsyncFD {
-        static corral::Awaitable<AsyncFD> auto open(std::string);
-        corral::Awaitable<void> auto close();
-    };
+```cpp
+struct AsyncFD {
+    static corral::Awaitable<AsyncFD> auto open(std::string);
+    corral::Awaitable<void> auto close();
+};
 
-    corral::Task<void> workWithAsyncFD() {
-        AsyncFD fd = co_await AsyncFD::open("...");
-        co_await corral::anyOf([&]() -> corral::Task<> {
-            // do something with fd
-        }, corral::untilCancelledAnd(fd.close()));
-    }
+corral::Task<void> workWithAsyncFD() {
+    AsyncFD fd = co_await AsyncFD::open("...");
+    co_await corral::anyOf([&]() -> corral::Task<> {
+        // do something with fd
+    }, corral::untilCancelledAnd(fd.close()));
+}
+```
 
 This way, regardless of whether the innermost task completes, exits
 via exception, or is cancelled from the outside, `fd` will be closed
@@ -401,17 +419,19 @@ cancellation point _in itself_, the above code snippet can be
 rewritten with more tasks without any changes to semantics
 and without adding any additional cancellation points:
 
-    corral::Task<AsyncFD> openAsyncFD() {
-        co_return co_await AsyncFD::open("...");
-    }
-    corral::Task<void> useAsyncFD(AsyncFD&) { /*...*/ }
+```cpp
+corral::Task<AsyncFD> openAsyncFD() {
+    co_return co_await AsyncFD::open("...");
+}
+corral::Task<void> useAsyncFD(AsyncFD&) { /*...*/ }
 
-    corral::Task<void> workWithAsyncFD() {
-        AsyncFD fd = co_await openAsyncFD();
-        co_await corral::anyOf(
-            useAsyncFD(fd),
-            corral::untilCancelledAnd(fd.close()));
-    }
+corral::Task<void> workWithAsyncFD() {
+    AsyncFD fd = co_await openAsyncFD();
+    co_await corral::anyOf(
+        useAsyncFD(fd),
+        corral::untilCancelledAnd(fd.close()));
+}
+```
 
 The task passed to `untilCancelledAnd()` will not itself see the
 cancellation that caused it to be started; if it's doing something that

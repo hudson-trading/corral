@@ -11,7 +11,9 @@ Let's suppose we want to write yet another echo server, but we're
 constrained (for illustrative purposes) to use an existing interface
 to listen for new connections. It has the signature:
 
-    Listener doListen(int port, std::function<void(int /*newFD*/)> cb);
+```cpp
+Listener doListen(int port, std::function<void(int /*newFD*/)> cb);
+```
 
 — with the semantics that, as long as the `Listener` remains in scope,
 `cb` will be called for each new connection accepted.
@@ -19,26 +21,28 @@ to listen for new connections. It has the signature:
 With a little help from `corral::CBPortal`, we can arrange to consume
 this stream of incoming connections in an async task:
 
-    // defined elsewhere to handle a single connection
-    corral::Task<void> serve(int fd);
+```cpp
+// defined elsewhere to handle a single connection
+corral::Task<void> serve(int fd);
 
-    corral::Task<void> listen(int port) {
-        CORRAL_WITH_NURSERY(n) {
-            corral::CBPortal<int> cbp; // callback takes (int)
-            std::optional<Listener> listener;
+corral::Task<void> listen(int port) {
+    CORRAL_WITH_NURSERY(n) {
+        corral::CBPortal<int> cbp; // callback takes (int)
+        std::optional<Listener> listener;
 
-            // Set up the portal and wait for the first CB invocation
-            int fd = co_await corral::untilCBCalled([&](auto cb) {
-                listener = doListen(port, cb);
-            }, cbp);
+        // Set up the portal and wait for the first CB invocation
+        int fd = co_await corral::untilCBCalled([&](auto cb) {
+            listener = doListen(port, cb);
+        }, cbp);
 
-            while (true) {
-                n.start(serve(fd));
-                // Wait for another invocation
-                fd = co_await cbp;
-            }
-        };
-    }
+        while (true) {
+            n.start(serve(fd));
+            // Wait for another invocation
+            fd = co_await cbp;
+        }
+    };
+}
+```
 
 `untilCBCalled()` accepts an "initiator function" (a lambda) and passes
 it a "bridge callback" (a small trivially-copyable callable object,
@@ -60,14 +64,16 @@ valid for as long as the `CBPortal` does. This makes it easy(ish) to
 interface with C-style APIs that take arguments
 `void (*cb)(void* /*cookie*/)`, `void* cookie`:
 
-    void doSomething(void (*cb)(void*, int /*x*/, int /*y*/), void* cookie);
+```cpp
+void doSomething(void (*cb)(void*, int /*x*/, int /*y*/), void* cookie);
 
-    corral::CBPortal<int, int> cbp;
-    auto [x, y] = co_await corral::untilCBCalled([&]<class CB>(CB& cb) {
-        doSomething(
-            +[](void* arg, int x, int y) { (*(CB*)arg)(x, y); },
-            &cb);
-    }, cbp);
+corral::CBPortal<int, int> cbp;
+auto [x, y] = co_await corral::untilCBCalled([&]<class CB>(CB& cb) {
+    doSomething(
+        +[](void* arg, int x, int y) { (*(CB*)arg)(x, y); },
+        &cb);
+}, cbp);
+```
 
 This is a lowish-level interface with some unavoidable sharp
 edges. Some things to keep in mind:
@@ -107,26 +113,30 @@ through `co_await corral::anyOf(cbp1, cbp2, ...)`.
 If you only need to wait for one call, you can skip the `CBPortal` and
 just write:
 
-    void doSomething(std::function<void(int /*x*/, int /*y*/)> resultCB);
+```cpp
+void doSomething(std::function<void(int /*x*/, int /*y*/)> resultCB);
 
-    auto [x, y] = co_await corral::untilCBCalled(
-            [&](std::function<void(int, int)> cb) {
-                doSomething(cb);
-            });
+auto [x, y] = co_await corral::untilCBCalled(
+        [&](std::function<void(int, int)> cb) {
+            doSomething(cb);
+        });
+```
 
 In this formulation, the signature(s) of the bridge callback(s) is
 inferred from the parameter(s) of the initiator lambda, which
 precludes using a generic lambda. If you need to capture a reference to
 the callback, as was done in the "C-style" example above, you can write:
 
-    void doSomething(void (*cb)(void*, int /*x*/, int /*y*/), void* cookie);
+```cpp
+void doSomething(void (*cb)(void*, int /*x*/, int /*y*/), void* cookie);
 
-    using CBType = corral::CBPortal<int, int>::Callback;
-    auto [x, y] = co_await corral::untilCBCalled([&](CBType& cb) {
-        doSomething(
-            +[](void* arg, int x, int y) { (*(CBType*)arg)(x, y); },
-            &cb);
-    });
+using CBType = corral::CBPortal<int, int>::Callback;
+auto [x, y] = co_await corral::untilCBCalled([&](CBType& cb) {
+    doSomething(
+        +[](void* arg, int x, int y) { (*(CBType*)arg)(x, y); },
+        &cb);
+});
+```
 
 Since the version of `untilCBCalled()` without portal arguments
 constructs the portal internally, it can't rely on a RAII guard in
@@ -144,11 +154,13 @@ conforms to an existing callback-style interface.
 Suppose we are given this interface for an abstract reader,
 which we cannot change:
 
-    class IReader {
-      public:
-        virtual void read(void* buf, size_t len,
-                          std::function<void(ssize_t)> cb) = 0;
-    };
+```cpp
+class IReader {
+  public:
+    virtual void read(void* buf, size_t len,
+                      std::function<void(ssize_t)> cb) = 0;
+};
+```
 
 — and we're implementing a reader with some nontrivial logic
 we'd rather express as an async function.
@@ -157,24 +169,26 @@ If you can use a [live object](03_live_objects.md), this is pretty
 easy; just start a task in your nursery that performs the operation
 and then calls the callback:
 
-    class MyReader : public IReader {
-        corral::Nursery* nursery_ = nullptr;
+```cpp
+class MyReader : public IReader {
+    corral::Nursery* nursery_ = nullptr;
 
-        // complicated logic goes here:
-        corral::Task<ssize_t> readImpl(void* buf, size_t len);
+    // complicated logic goes here:
+    corral::Task<ssize_t> readImpl(void* buf, size_t len);
 
-      public:
-        corral::Task<void> run() { return corral::openNursery(nursery_); }
+  public:
+    corral::Task<void> run() { return corral::openNursery(nursery_); }
 
-        void read(void* buf, size_t len, std::function<void(ssize_t)> cb) {
-            nursery_->start([=]() -> corral::Task<> {
-                try {
-                    ssize_t result = co_await readImpl(buf, len);
-                    cb(result);
-                } catch (std::exception&) { cb(-1); }
-            });
-        }
-    };
+    void read(void* buf, size_t len, std::function<void(ssize_t)> cb) {
+        nursery_->start([=]() -> corral::Task<> {
+            try {
+                ssize_t result = co_await readImpl(buf, len);
+                cb(result);
+            } catch (std::exception&) { cb(-1); }
+        });
+    }
+};
+```
 
 This will work fine if there is an appropriate "parent object" for
 `MyReader` that can arrange to run `MyReader::run()` and thus manage
@@ -183,29 +197,31 @@ in an existing system, you probably don't have a clean path of async
 tasks all the way up to `main()`. In this situation, corral offers an
 escape from the structured concurrency rules: an "unsafe nursery".
 
-    class MyReader : public IReader {
-        corral::UnsafeNursery nursery_;
+```cpp
+class MyReader : public IReader {
+    corral::UnsafeNursery nursery_;
 
-        // complicated logic goes here:
-        corral::Task<ssize_t> readImpl(void* buf, size_t len);
+    // complicated logic goes here:
+    corral::Task<ssize_t> readImpl(void* buf, size_t len);
 
-      public:
-        // Event loop must be specified explicitly because it can't
-        // be inferred from the nursery parent, because there isn't one.
-        // (The nursery doesn't directly use the event loop, but it needs
-        // to be able to tell that its tasks are running "at the same time"
-        // as other tasks that use this event loop.)
-        MyReader(boost::asio::io_service& io) : nursery_(io) {}
+  public:
+    // Event loop must be specified explicitly because it can't
+    // be inferred from the nursery parent, because there isn't one.
+    // (The nursery doesn't directly use the event loop, but it needs
+    // to be able to tell that its tasks are running "at the same time"
+    // as other tasks that use this event loop.)
+    MyReader(boost::asio::io_service& io) : nursery_(io) {}
 
-        void read(void* buf, size_t len, std::function<void(ssize_t)> cb) {
-            nursery_.start([=]() -> corral::Task<> {
-                try {
-                    ssize_t result = co_await readImpl(buf, len);
-                    cb(result);
-                } catch (std::exception&) { cb(-1); }
-            });
-        }
-    };
+    void read(void* buf, size_t len, std::function<void(ssize_t)> cb) {
+        nursery_.start([=]() -> corral::Task<> {
+            try {
+                ssize_t result = co_await readImpl(buf, len);
+                cb(result);
+            } catch (std::exception&) { cb(-1); }
+        });
+    }
+};
+```
 
 An unsafe nursery acts as a supervisor for an arbitrary number of tasks,
 just like a regular nursery does. And it has a public constructor and
@@ -265,14 +281,16 @@ be invoked when the tasks complete and the nursery is safe to destroy
 an option to implement asynchronous destruction of an object
 featuring UnsafeNursery if necessary:
 
-    class MyReader: public IReader { // see above
-        corral::UnsafeNursery nursery_;
+```cpp
+class MyReader: public IReader { // see above
+    corral::UnsafeNursery nursery_;
 
-      public:
-        void asyncDestroy() {
-            nursery_.asyncClose([this]() noexcept { delete this; });
-        }
-    };
+  public:
+    void asyncDestroy() {
+        nursery_.asyncClose([this]() noexcept { delete this; });
+    }
+};
+```
 
 `asyncDestroy()` may also be helpful if the object can be destroyed
 from within the completion callback of a regular operation, like
@@ -284,18 +302,20 @@ heap-allocate the `UnsafeNursery` (in order to be able to decouple
 its lifetime from the lifetime of `MyReader`) and call `asyncClose()`
 from the destructor of `MyReader`:
 
-    class MyReader: public IReader { // see above
-        std::unique_ptr<corral::UnsafeNursery> nursery_;
+```cpp
+class MyReader: public IReader { // see above
+    std::unique_ptr<corral::UnsafeNursery> nursery_;
 
-      public:
-        MyReader(boost::asio::io_service& io):
-            nursery_(std::make_unique<corral::UnsafeNursery>(io));
+  public:
+    MyReader(boost::asio::io_service& io):
+        nursery_(std::make_unique<corral::UnsafeNursery>(io));
 
-        ~MyReader() {
-            auto n = nursery_.release();
-            n->asyncClose([n]() noexcept { delete n; })
-        }
-    };
+    ~MyReader() {
+        auto n = nursery_.release();
+        n->asyncClose([n]() noexcept { delete n; })
+    }
+};
+```
 
 Note that in the latter case any tasks still running might retain a pointer
 to `MyReader` which is already destroyed; it's up to the user to guard

@@ -24,19 +24,21 @@ store it in a variable, etc; and as long as the nursery object is
 alive (i.e. until the block completes), any function which has access
 to that reference may use it to spawn tasks into that nursery:
 
-    void delayedPrint(corral::Nursery& n) {
-        n.start([]() -> corral::Task<> {
-            co_await corral::sleepFor(io_service, 1s);
-            std::cout << "Hello, world!" << std::endl;
-        });
-    }
+```cpp
+void delayedPrint(corral::Nursery& n) {
+    n.start([]() -> corral::Task<> {
+        co_await corral::sleepFor(io_service, 1s);
+        std::cout << "Hello, world!" << std::endl;
+    });
+}
 
-    corral::Task<void> func() {
-        CORRAL_WITH_NURSERY(n) {
-            delayedPrint(n);
-            co_return corral::join;
-        };
-    }
+corral::Task<void> func() {
+    CORRAL_WITH_NURSERY(n) {
+        delayedPrint(n);
+        co_return corral::join;
+    };
+}
+```
 
 This allows bending the rules a little, but still in an organized way:
 
@@ -89,16 +91,18 @@ You could require that the user of your object provide a nursery
 reference when constructing it, but this winds up creating something
 of a lifetime trap:
 
-    CORRAL_WITH_NURSERY(n) {
-        MyLiveClass obj(n);
-        obj.doSomething();
-        co_return corral::cancel;
+```cpp
+CORRAL_WITH_NURSERY(n) {
+    MyLiveClass obj(n);
+    obj.doSomething();
+    co_return corral::cancel;
 
-        // at this point `obj` is destroyed (because it is local to this
-        // block), but `n` is still alive, and background tasks of `obj`
-        // spawned there are still running, potentially holding dangling
-        // references to `obj`
-    };
+    // at this point `obj` is destroyed (because it is local to this
+    // block), but `n` is still alive, and background tasks of `obj`
+    // spawned there are still running, potentially holding dangling
+    // references to `obj`
+};
+```
 
 Instead, we recommend an approach akin to two-phase initialization,
 which we refer to as a "live object". The idea is that you define your
@@ -106,28 +110,32 @@ object to contain a nursery *pointer* as a member, and endow it with
 an async method `run()` which opens the nursery, starts up the support
 tasks, and stashes the pointer for other methods to use:
 
-    class MyLiveClass {
-        corral::Nursery* nursery_ = nullptr;
-      public:
-        corral::Task<void> run() {
-            CORRAL_WITH_NURSERY(n) {
-                auto guard = folly::makeGuard([this] { nursery_ = nullptr; });
-                nursery_ = &n;
-                CORRAL_SUSPEND_FOREVER();
-            };
-        }
+```cpp
+class MyLiveClass {
+    corral::Nursery* nursery_ = nullptr;
+  public:
+    corral::Task<void> run() {
+        CORRAL_WITH_NURSERY(n) {
+            auto guard = folly::makeGuard([this] { nursery_ = nullptr; });
+            nursery_ = &n;
+            CORRAL_SUSPEND_FOREVER();
+        };
+    }
 
-        // Now `nursery_` can be used to spawn tasks
-        corral::Task<void> asyncThing();
-        void beginThing() {
-            nursery_->start(asyncThing());
-        }
-    };
+    // Now `nursery_` can be used to spawn tasks
+    corral::Task<void> asyncThing();
+    void beginThing() {
+        nursery_->start(asyncThing());
+    }
+};
+```
 
 This particular shape of `run()` can be simplified by using
 `corral::openNursery()`, which does exactly the above:
 
-    corral::Task<void> run() { return corral::openNursery(nursery_); }
+```cpp
+corral::Task<void> run() { return corral::openNursery(nursery_); }
+```
 
 (Note that this uses a trick we haven't seen yet: it's a synchronous
 function which calls an async function and passes along the returned
@@ -142,15 +150,17 @@ do things.
 Live objects can naturally nest: all that's required is for the parent
 object's `run()` to `run()` each of its child objects:
 
-    class MyParentLiveClass {
-        MyChildLiveClass1 child1_;
-        MyChildLiveClass2 child2_;
-      public:
-        corral::Task<void> run() {
-            co_await corral::allOf(child1_.run(),
-                                   child2_.run());
-        }
-    };
+```cpp
+class MyParentLiveClass {
+    MyChildLiveClass1 child1_;
+    MyChildLiveClass2 child2_;
+  public:
+    corral::Task<void> run() {
+        co_await corral::allOf(child1_.run(),
+                               child2_.run());
+    }
+};
+```
 
 Note that this parent class does not need a nursery for its own use,
 but still needs `run()` to establish a parent task to supervise the `run()`

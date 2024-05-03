@@ -11,11 +11,11 @@ Any customization macros that you use must be defined before you include
 any corral headers.
 
 All the functionality described here is provided by:
-```
+```cpp
 #include <corral/corral.h>
 ```
 If you are using the Boost.Asio integration, you should additionally:
-```
+```cpp
 #include <corral/asio.h>
 ```
 
@@ -39,7 +39,7 @@ release.
 
 ### Awaitable\<Ret = _Unspecified_\>
 
-```
+```cpp
 template <class T, class Ret = Unspecified>
 concept Awaitable = ...;
 ```
@@ -54,7 +54,7 @@ extensions have been implemented, but they are not yet exposed publicly.
 
 ### Handle
 
-```
+```cpp
 using Handle = std::coroutine_handle<void>;
 ```
 A typedef for `std::coroutine_handle<void>`, which shows up as a parameter
@@ -62,7 +62,7 @@ of `await_suspend()` and `await_cancel()`, among other places.
 
 ### Task\<T\>
 
-```
+```cpp
 template <class T = void>
 class [[nodiscard]] Task {
   public:
@@ -93,7 +93,7 @@ result is `T`. `Task<>` is an alias for `Task<void>`.
 
 ### Nursery
 
-```
+```cpp
 class Nursery {
   private:
     Nursery();
@@ -153,7 +153,7 @@ A scope in which a dynamic number of child tasks can run.
 
 ### UnsafeNursery
 
-```
+```cpp
 class UnsafeNursery: public Nursery {
 public:
     explicit UnsafeNursery(EventLoop auto& eventLoop);
@@ -192,7 +192,7 @@ rooted at `corral::run()`.
 
 ### CBPortal<Ts...>
 
-```
+```cpp
 template <class... Ts> class CBPortal {
   public:
     CBPortal();
@@ -242,7 +242,7 @@ for more details, including important notes about cancellation handling.
 
 ### EventLoopTraits
 
-```
+```cpp
 class EventLoopID {
   public:
     explicit constexpr EventLoopID(const void*);
@@ -358,7 +358,7 @@ in order to teach corral how to interact with it.
 
 ### Event
 
-```
+```cpp
 class Event {
     Event(Event&&) = delete;
     Event& operator=(Event&&) = delete;
@@ -393,7 +393,7 @@ the event to be in the triggered state.
 
 ### ParkingLot
 
-```
+```cpp
 class ParkingLot {
     ParkingLot(ParkingLot&&) = delete;
     ParkingLot& operator=(ParkingLot&&) = delete;
@@ -421,7 +421,7 @@ it's generally not necessary).
 
 ### Semaphore
 
-```
+```cpp
 class Semaphore {
     Semaphore(Semaphore&&) = delete;
     Semaphore& operator=(Semaphore&&) = delete;
@@ -460,7 +460,7 @@ the counter is zero will block until it isn't, then decrement it.
 
 ### Shared
 
-```
+```cpp
 template <class T>
 class Shared {
   public:
@@ -506,7 +506,7 @@ types are also supported.
 
 ### Value<T>
 
-```
+```cpp
 template <class T>
 class Value {
     Value(Value&&) = delete;
@@ -566,7 +566,7 @@ thereof, satisfies a given condition.
 
 ### Channel<T>
 
-```
+```cpp
 template <class T>
 class Channel {
   public:
@@ -668,7 +668,7 @@ An ordered communication channel for sending objects of type T between tasks.
 
 ### Introspection tools
 
-```
+```cpp
 template <std::output_iterator<uintptr_t> OutIt>
 OutIt collectAsyncStackTrace(OutIt out);
 
@@ -707,7 +707,7 @@ Awaitable<OutIt> auto dumpTaskTree(OutIt out);
 
 ### Executor
 
-```
+```cpp
 class Executor {
   public:
     template <class T>
