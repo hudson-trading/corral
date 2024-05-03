@@ -86,7 +86,7 @@ So let's try an example that runs two async functions in parallel:
 ```cpp
 corral::Task<void> hello_twice() {
     std::cout << "Going to greet the world twice" << std::endl;
-    co_await async::allOf(async_hello(), async_hello());
+    co_await corral::allOf(async_hello(), async_hello());
 }
 int main() {
     corral::run(io_service, hello_twice());
