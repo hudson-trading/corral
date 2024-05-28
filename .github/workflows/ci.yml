@@ -52,7 +52,7 @@ jobs:
             cxx: aarch64-linux-gnu-g++-12
             cxxflags: -static
             test_runner: qemu-aarch64-static
-            
+
           - variant: msvc-wine
 
             # Note: windows workers are in short supply on github,
@@ -62,7 +62,7 @@ jobs:
               wine64 wine64-preloader wine64-tools python3 msitools
               python3-simplejson python3-six ca-certificates winbind
               cmake{,-data}=3.22.1-1ubuntu1
-              
+
             init: |
               cd /usr/bin
               sudo ln -sf ../lib/wine/wine64 .
@@ -80,42 +80,42 @@ jobs:
             cxx: cl
             cxxflags: /Iz:/opt/include /std:c++20 /bigobj /EHsc
             test_runner: wine64
-            
+
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    # TODO: remove this after 24.04 releases to GA
-    - name: Bump to 24.04
-      run: |
-        cd /etc/apt && sed s/jammy/noble/ sources.list | sudo tee sources.list.d/noble.list >/dev/null
-        sudo apt-get -q -q update
+      # TODO: remove this after 24.04 releases to GA
+      - name: Bump to 24.04
+        run: |
+          cd /etc/apt && sed s/jammy/noble/ sources.list | sudo tee sources.list.d/noble.list >/dev/null
+          sudo apt-get -q -q update
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get -q -q update
-        sudo apt-get install -q -q -y git libboost1.83-dev ${{ matrix.deps }}
-        sudo mkdir -p /opt/include
-        sudo cp -r /usr/include/boost /opt/include
+      - name: Install dependencies
+        run: |
+          sudo apt-get -q -q update
+          sudo apt-get install -q -q -y git libboost1.83-dev ${{ matrix.deps }}
+          sudo mkdir -p /opt/include
+          sudo cp -r /usr/include/boost /opt/include
 
-    - name: Variant-specific init
-      run: ${{ matrix.init }}
+      - name: Variant-specific init
+        run: ${{ matrix.init }}
 
-    - name: Configure
-      run: >
-        mkdir -p ${{ github.workspace }}/build 
-        && cd ${{ github.workspace }}/build 
-        && env ${{ matrix.env }} cmake
-        -DCMAKE_C_COMPILER=${{ matrix.cc }}
-        -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
-        -DCMAKE_CXX_FLAGS="${{ matrix.cxxflags }}"
-        -DCORRAL_BOOST=/opt/include
-        -DCORRAL_CATCH2=https://github.com/catchorg/catch2
-        -DCORRAL_TEST_RUNNER=${{ matrix.test_runner }}
-        ${{ matrix.cmake_flags }}
-        ${{ github.workspace }}
+      - name: Configure
+        run: >
+          mkdir -p ${{ github.workspace }}/build 
+          && cd ${{ github.workspace }}/build 
+          && env ${{ matrix.env }} cmake
+          -DCMAKE_C_COMPILER=${{ matrix.cc }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          -DCMAKE_CXX_FLAGS="${{ matrix.cxxflags }}"
+          -DCORRAL_BOOST=/opt/include
+          -DCORRAL_CATCH2=https://github.com/catchorg/catch2
+          -DCORRAL_TEST_RUNNER=${{ matrix.test_runner }}
+          ${{ matrix.cmake_flags }}
+          ${{ github.workspace }}
 
-    - name: Build
-      run: cd ${{ github.workspace }}/build && env ${{ matrix.env }} make
+      - name: Build
+        run: cd ${{ github.workspace }}/build && env ${{ matrix.env }} make
 
-    - name: Test
-      run: cd ${{ github.workspace }}/build && env ${{ matrix.env }} ctest --output-on-failure
+      - name: Test
+        run: cd ${{ github.workspace }}/build && env ${{ matrix.env }} ctest --output-on-failure
