@@ -514,4 +514,20 @@ inline Promise<void>* noopPromise() {
     return &p;
 }
 
+struct DestroyPromise {
+    template <class T> void operator()(Promise<T>* p) const {
+        if constexpr (std::is_same_v<T, void>) {
+            if (p == detail::noopPromise()) {
+                return;
+            }
+        }
+        if (p) {
+            p->destroy();
+        }
+    }
+};
+
+template <class T>
+using PromisePtr = std::unique_ptr<Promise<T>, DestroyPromise>;
+
 } // namespace corral::detail

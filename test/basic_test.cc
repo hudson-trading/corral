@@ -1304,6 +1304,111 @@ CORRAL_TEST_CASE("run-on-cancel") {
     CATCH_CHECK(t.now() == 3ms);
 }
 
+CORRAL_TEST_CASE("try-finally") {
+    int stage = 0;
+    auto checkStage = [&stage](int expected) {
+        CATCH_CHECK(stage == expected);
+        stage = expected + 1;
+    };
+
+    CATCH_SECTION("normal") {
+        CORRAL_TRY {
+            checkStage(0);
+            ScopeGuard guard([&] { checkStage(1); });
+            co_return;
+        }
+        CORRAL_FINALLY {
+            checkStage(2);
+            co_return;
+        };
+        checkStage(3);
+    }
+
+    CATCH_SECTION("no-macros") {
+        co_await try_([&]() -> Task<> {
+            checkStage(0);
+            ScopeGuard guard([&] { checkStage(1); });
+            co_return;
+        }).finally([&]() -> Task<> {
+            checkStage(2);
+            co_return;
+        });
+        checkStage(3);
+    }
+
+    CATCH_SECTION("exception") {
+        try {
+            CORRAL_TRY {
+                checkStage(0);
+                ScopeGuard guard([&] { checkStage(1); });
+                co_await t.sleep(1ms);
+                throw std::runtime_error("test");
+            }
+            CORRAL_FINALLY {
+                checkStage(2);
+                co_return;
+            };
+        } catch (std::exception&) { checkStage(3); }
+        checkStage(4);
+    }
+
+    CATCH_SECTION("sync-exception") {
+        // Make sure finally block is executed even if try-block
+        // is not a coroutine
+        try {
+            CORRAL_TRY {
+                checkStage(0);
+                ScopeGuard guard([&] { checkStage(1); });
+                throw std::runtime_error("test");
+                // no co_return or co_await here
+            }
+            CORRAL_FINALLY {
+                checkStage(2);
+                co_return;
+            };
+        } catch (std::exception&) { checkStage(3); }
+        checkStage(4);
+    }
+
+    CATCH_SECTION("cancellation") {
+        auto [_, done] = co_await anyOf(t.sleep(2ms), [&]() -> Task<> {
+            CORRAL_TRY {
+                checkStage(0);
+                ScopeGuard guard([&] { checkStage(2); });
+                co_await untilCancelledAnd([&]() -> Task<> {
+                    checkStage(1);
+                    co_await t.sleep(1ms);
+                });
+            }
+            CORRAL_FINALLY {
+                checkStage(3);
+                co_await t.sleep(1ms);
+            };
+        });
+        CATCH_CHECK(!done);
+        checkStage(4);
+        CATCH_CHECK(t.now() == 4ms);
+    }
+
+    CATCH_SECTION("early-cancel") {
+        CORRAL_WITH_NURSERY(n) {
+            n.cancel();
+
+            CORRAL_TRY {
+                checkStage(0);
+                co_await t.sleep(1ms);
+            }
+            CORRAL_FINALLY {
+                checkStage(1);
+                co_await t.sleep(1ms);
+            };
+            co_return join;
+        };
+        checkStage(2);
+        CATCH_CHECK(t.now() == 1ms);
+    }
+}
+
 CORRAL_TEST_CASE("task-tree") {
     std::vector<TreeDumpElement> tree;
     CORRAL_WITH_NURSERY(n) {

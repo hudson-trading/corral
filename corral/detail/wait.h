@@ -887,4 +887,186 @@ class AllOfRange : public MuxRange<AllOfRange<Range>, Range> {
 };
 
 
+template <class BodyLambda, class GuardLambda>
+class TryFinally final : private TaskParent<void>, public NurseryScopeBase {
+  public:
+    TryFinally(BodyLambda body, GuardLambda guard)
+      : guardLambda_(std::move(guard)) {
+        new (&bodyLambda_) BodyLambda(std::move(body));
+        try {
+            body_.reset(bodyLambda_().release());
+        } catch (...) {
+            exception_ = std::current_exception();
+            bodyLambda_.~BodyLambda();
+        }
+    }
+
+    ~TryFinally() { CORRAL_ASSERT(!body_); }
+
+    void await_set_executor(Executor* ex) noexcept {
+        executor_ = ex;
+        if (body_) {
+            body_->setExecutor(ex);
+        }
+    }
+
+    bool await_ready() const noexcept { return false; }
+
+    bool await_early_cancel() const noexcept {
+        if (body_) {
+            body_->cancel();
+        }
+        return false;
+    }
+
+    Handle await_suspend(Handle h) {
+        parent_ = h;
+        if (body_) {
+            CORRAL_TRACE("    ... try-finally: pr %p", body_.get());
+            return body_->start(this, parent_);
+        } else if (beginGuard()) {
+            CORRAL_TRACE("    ... try-finally (early-failed): guard %p",
+                         guard_.get());
+            return guard_->start(this, parent_);
+        } else {
+            CORRAL_TRACE("    ... try-finally (done)");
+            return h;
+        }
+    }
+
+    bool await_cancel(Handle) noexcept {
+        if (body_) {
+            body_->cancel();
+        } else {
+            // We're already in guard phase, which must run to completion
+        }
+        return false;
+    }
+
+    bool await_must_resume() const noexcept {
+        return completed_ || exception_ != nullptr;
+    }
+
+    void await_resume() {
+        if (exception_) {
+            std::rethrow_exception(exception_);
+        }
+    }
+
+    void await_introspect(detail::TaskTreeCollector& c) const noexcept {
+        if (body_) {
+            body_->await_introspect(c);
+        } else if (guard_) {
+            guard_->await_introspect(c);
+        }
+    }
+
+  private:
+    void storeSuccess() override {
+        if (body_) {
+            completed_ = true;
+        }
+    }
+
+    void storeException() noexcept override {
+        if (exception_) {
+            std::terminate(); // multiple exceptions in flight
+        } else {
+            exception_ = std::current_exception();
+        }
+    }
+
+    bool beginGuard() {
+        body_.reset();
+        bodyLambda_.~BodyLambda();
+
+        try {
+            guard_.reset(guardLambda_().release());
+            guard_->setExecutor(executor_);
+            return true;
+        } catch (...) {
+            exception_ = std::current_exception();
+            guard_.reset();
+            return false;
+        }
+    }
+
+    Handle continuation(BasePromise* p) noexcept override {
+        if (p == body_.get()) {
+            if (beginGuard()) {
+                CORRAL_TRACE("pr %p done, starting guard %p", body_.get(),
+                             guard_.get());
+                return guard_->start(this, parent_);
+            } else {
+                CORRAL_TRACE("pr %p done, guard early-failed", body_.get());
+                return std::exchange(parent_, noopHandle());
+            }
+        } else if (p == guard_.get()) {
+            CORRAL_TRACE("guard %p done", guard_.get());
+            return std::exchange(parent_, noopHandle());
+        } else {
+            CORRAL_ASSERT(!"unexpected continuation");
+            return noopHandle();
+        }
+    }
+
+  private:
+    PromisePtr<void> body_;
+    union {
+        // In scope iff body_ holds a non-null value
+        [[no_unique_address]] BodyLambda bodyLambda_;
+    };
+
+    PromisePtr<void> guard_;
+    [[no_unique_address]] GuardLambda guardLambda_;
+
+    Handle parent_;
+    std::exception_ptr exception_;
+    bool completed_ = false;
+    Executor* executor_ = nullptr;
+};
+
+/// A factory for creating a `try-finally` block through
+/// `co_await corral::try_(...).finally(...)` syntax.
+template <class BodyLambda> class TryFinallyFactory {
+    BodyLambda bodyLambda_;
+
+  public:
+    explicit TryFinallyFactory(BodyLambda&& bodyLambda)
+      : bodyLambda_(std::forward<BodyLambda>(bodyLambda)) {}
+
+    template <class GuardLambda>
+        requires(std::is_invocable_r_v<Task<void>, GuardLambda>)
+    auto finally(GuardLambda&& guardLambda) {
+        return TryFinally<BodyLambda, decltype(guardLambda)>(
+                std::move(bodyLambda_), std::forward<GuardLambda>(guardLambda));
+    }
+};
+
+/// A factory for creating a `try-finally` block through
+/// `CORRAL_TRY { ... } CORRAL_FINALLY { ... };` syntax.
+class TryFinallyMacroFactory {
+    template <class BodyLambda> class Body {
+        BodyLambda bodyLambda_;
+
+      public:
+        Body(BodyLambda bodyLambda) : bodyLambda_(std::move(bodyLambda)) {}
+
+        template <class GuardLambda>
+            requires(std::is_invocable_r_v<Task<void>, GuardLambda>)
+        auto operator%(GuardLambda&& guardLambda) {
+            return TryFinally<BodyLambda, decltype(guardLambda)>(
+                    std::move(bodyLambda_),
+                    std::forward<GuardLambda>(guardLambda));
+        }
+    };
+
+  public:
+    template <class BodyLambda>
+        requires(std::is_invocable_r_v<Task<void>, BodyLambda>)
+    auto operator%(BodyLambda&& bodyLambda) {
+        return Body<BodyLambda>(std::forward<BodyLambda>(bodyLambda));
+    }
+};
+
 } // namespace corral::detail

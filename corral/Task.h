@@ -30,6 +30,7 @@
 namespace corral {
 class Nursery;
 
+
 /// An async task backed by a C++20 coroutine.
 ///
 /// This type shows up primarily as the return value of async functions.
@@ -41,43 +42,24 @@ template <class T = void> class [[nodiscard]] Task : public detail::TaskTag {
     using ReturnType = T;
 
     Task() = default;
-    Task(Task<T>&& c) noexcept : promise_(std::exchange(c.promise_, nullptr)) {}
     explicit Task(detail::Promise<T>& promise) : promise_(&promise) {}
 
-    Task& operator=(Task<T>&& c) noexcept {
-        if (this != &c) {
-            destroy();
-            promise_ = std::exchange(c.promise_, nullptr);
-        }
-        return *this;
-    }
-
-    explicit operator bool() const { return promise_ != nullptr; }
-
-    ~Task() { destroy(); }
+    explicit operator bool() const { return promise_.get() != nullptr; }
 
     /// co_await'ing on a task starts it and suspends the caller until its
     /// completion.
-    auto operator co_await() { return detail::TaskAwaitable<T>(promise_); }
-
-  private:
-    void destroy() {
-        auto promise = std::exchange(promise_, nullptr);
-        if constexpr (std::is_same_v<T, void>) {
-            if (promise == detail::noopPromise()) {
-                return;
-            }
-        }
-        if (promise) {
-            promise->destroy();
-        }
+    auto operator co_await() {
+        return detail::TaskAwaitable<T>(promise_.get());
     }
 
-    detail::Promise<T>* release() { return std::exchange(promise_, nullptr); }
+  private:
+    detail::Promise<T>* release() { return promise_.release(); }
 
   private:
-    detail::Promise<T>* promise_ = nullptr;
+    detail::PromisePtr<T> promise_;
+
     friend class Nursery;
+    template <class, class> friend class detail::TryFinally;
 };
 
 namespace detail {

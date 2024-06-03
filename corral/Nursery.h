@@ -537,7 +537,7 @@ class Nursery::Scope : public detail::NurseryScopeBase,
         nursery_.parent_ = h;
         Task<detail::NurseryBodyRetval> body = callable_(nursery_);
         CORRAL_TRACE("    ... nursery %p starting with task %p", &nursery_,
-                     body.promise_);
+                     body.promise_.get());
         return nursery_.addTask(std::move(body), this);
     }
 

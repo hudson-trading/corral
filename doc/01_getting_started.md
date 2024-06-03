@@ -391,9 +391,8 @@ cancelling the `acceptorLoop()` task shown above will also cancel any
 
 In certain cases, resource cleanup needs to be asynchronous as well,
 making it infeasible to use RAII. For such cases, corral provides an
-`untilCancelledAnd()` wrapper, which starts its argument child task when
-the wrapper is cancelled and doesn't confirm the cancellation until
-the child completes. Typically it would be used via `anyOf()`:
+equivalent of try/finally block which allows both clauses to be
+asynchronous:
 
 ```cpp
 struct AsyncFD {
@@ -403,9 +402,11 @@ struct AsyncFD {
 
 corral::Task<void> workWithAsyncFD() {
     AsyncFD fd = co_await AsyncFD::open("...");
-    co_await corral::anyOf([&]() -> corral::Task<> {
+    co_await try_([&]() -> Task<void> {
         // do something with fd
-    }, corral::untilCancelledAnd(fd.close()));
+    }).finally([&]() -> Task<void> {
+        co_await fd.close();
+    });
 }
 ```
 
@@ -413,6 +414,21 @@ This way, regardless of whether the innermost task completes, exits
 via exception, or is cancelled from the outside, `fd` will be closed
 asynchronously, and the outer task will not get resumed until the close
 completes.
+
+Another syntax for the above is available, which creatively (ab)uses
+C++ macros:
+
+```cpp
+corral::Task<void> workWithAsyncFD() {
+    AsyncFD fd = co_await AsyncFD::open("...");
+    CORRAL_TRY {
+        // do something with fd
+    }
+    CORRAL_FINALLY {
+        co_await fd.close();
+    }; // <- the trailing semicolon is required here
+}
+```
 
 Because merely entering or returning from an async function is not a
 cancellation point _in itself_, the above code snippet can be
@@ -423,17 +439,18 @@ and without adding any additional cancellation points:
 corral::Task<AsyncFD> openAsyncFD() {
     co_return co_await AsyncFD::open("...");
 }
-corral::Task<void> useAsyncFD(AsyncFD&) { /*...*/ }
+corral::Task<void> consumeAsyncFD(AsyncFD fd) {
+    CORRAL_TRY { /* ... */ }
+    CORRAL_FINALLY { co_await fd.close(); };
+}
 
 corral::Task<void> workWithAsyncFD() {
     AsyncFD fd = co_await openAsyncFD();
-    co_await corral::anyOf(
-        useAsyncFD(fd),
-        corral::untilCancelledAnd(fd.close()));
+    co_await consumeAsyncFD(std::move(fd));
 }
 ```
 
-The task passed to `untilCancelledAnd()` will not itself see the
-cancellation that caused it to be started; if it's doing something that
+If try/finally block was cancelled from the outside, the finally-clause
+will not itself see the cancellation. If it's doing something that
 might block indefinitely, it should impose an internal timeout to avoid
 deadlocking the program.

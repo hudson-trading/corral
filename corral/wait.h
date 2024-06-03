@@ -104,4 +104,35 @@ template <AwaitableRange<> Range> auto mostOf(Range&& range) {
     return detail::MostOfRange<Range>(std::forward<Range>(range));
 }
 
+/// A try/finally block allowing both try and finally blocks to be asynchronous,
+/// useful instead of a scope guard if the cleanup code is asynchronous.
+///
+///     AsyncThing thing = co_await AsyncThing::create();
+///     co_await corral::try_([&]() -> corral::Task<> {
+///         co_await workWithThing();
+///     }).finally([&]() -> corral::Task<> {
+///         co_await thing.destroy();
+///     });
+///
+/// Unlike anyOf() etc, the try block is fully destroyed (triggering any scope
+/// guards etc) before the finally block begins executing.
+template <class TryBlock>
+    requires(std::is_invocable_r_v<Task<void>, TryBlock>)
+auto try_(TryBlock&& tryBlock) {
+    return detail::TryFinallyFactory(std::forward<TryBlock>(tryBlock));
+}
+
+/// Same as above but with a different, slightly more laconic, syntax:
+///
+///     AsyncThing thing = co_await AsyncThing::create();
+///     CORRAL_TRY {
+///         co_await workWithThing();
+///     } CORRAL_FINALLY {
+///         co_await thing.destroy();
+///     }; // <-- the semicolon is required here
+#define CORRAL_TRY                                                             \
+    co_yield ::corral::detail::TryFinallyMacroFactory{} % [&]()                \
+            -> ::corral::Task<void>
+#define CORRAL_FINALLY % [&]() -> ::corral::Task<void>
+
 } // namespace corral
