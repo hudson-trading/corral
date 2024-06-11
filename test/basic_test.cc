@@ -95,37 +95,36 @@ class TestEventLoop {
 
         auto await_early_cancel() noexcept {
             if constexpr (Cancellable) {
-                CORRAL_TRACE("sleep %p (%lld ms) early cancelling", this,
-                             delay_.count());
+                CORRAL_TRACE("sleep %p (%ld ms) early cancelling", this,
+                             delayMS());
                 return std::true_type{};
             } else {
-                CORRAL_TRACE("sleep %p (%lld ms) NOT early cancelling", this,
-                             delay_.count());
+                CORRAL_TRACE("sleep %p (%ld ms) NOT early cancelling", this,
+                             delayMS());
                 return false;
             }
         }
         bool await_ready() const noexcept { return false; }
         void await_suspend(Handle h) {
-            CORRAL_TRACE("    ...on sleep %p (%lld ms)", this, delay_.count());
+            CORRAL_TRACE("    ...on sleep %p (%ld ms)", this, delayMS());
             suspended_ = true;
             parent_ = h;
             it_ = eventLoop_.events_.emplace(eventLoop_.now_ + delay_, [this] {
-                CORRAL_TRACE("sleep %p (%lld ms) resuming parent", this,
-                             delay_.count());
+                CORRAL_TRACE("sleep %p (%ld ms) resuming parent", this,
+                             delayMS());
                 suspended_ = false;
                 parent_.resume();
             });
         }
         auto await_cancel(Handle) noexcept {
             if constexpr (Cancellable) {
-                CORRAL_TRACE("sleep %p (%lld ms) cancelling", this,
-                             delay_.count());
+                CORRAL_TRACE("sleep %p (%ld ms) cancelling", this, delayMS());
                 eventLoop_.events_.erase(it_);
                 suspended_ = false;
                 return std::true_type{};
             } else {
-                CORRAL_TRACE("sleep %p (%lld ms) NOT cancelling", this,
-                             delay_.count());
+                CORRAL_TRACE("sleep %p (%ld ms) NOT cancelling", this,
+                             delayMS());
                 return false;
             }
         }
@@ -141,6 +140,9 @@ class TestEventLoop {
         void await_resume() { suspended_ = false; }
 
         void await_introspect(auto& c) const noexcept { c.node("Sleep"); }
+
+      private:
+        long delayMS() const { return static_cast<long>(delay_.count()); }
 
       private:
         TestEventLoop& eventLoop_;
@@ -1831,11 +1833,10 @@ CORRAL_TEST_CASE("bounded-channel") {
             CATCH_CHECK(channel.full());
             CATCH_CHECK(ranLast == false);
 
-            std::array<std::optional<int>, 3> values = {
-                    co_await channel.receive(),
-                    co_await channel.receive(),
-                    co_await channel.receive(),
-            };
+            std::array<std::optional<int>, 3> values;
+            values[0] = co_await channel.receive();
+            values[1] = co_await channel.receive();
+            values[2] = co_await channel.receive();
             CATCH_CHECK(values == std::array<std::optional<int>, 3>{1, 2, 3});
 
             co_await yield;
