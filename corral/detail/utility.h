@@ -40,6 +40,8 @@ class Executor;
 
 namespace detail {
 
+class BasePromise;
+
 /// Base class to inherit Task<T> from, to easily figure out if something
 /// is a Task.
 struct TaskTag {};
@@ -551,7 +553,6 @@ template <class T> decltype(auto) getAwaitable(T&& t) {
     // clang-format on
 }
 
-
 /// A dummy type used instead of void when temporarily storing results
 /// of awaitables, to allow void results to be stored without specialization.
 struct Void {};
@@ -881,6 +882,67 @@ constexpr inline bool is_specialization_of_v =
 template <typename T>
 constexpr bool is_reference_wrapper_v =
         is_specialization_of_v<std::reference_wrapper, T>;
+
+
+// CallableSignature<Fn> is a structure containing the following alias
+// declarations:
+//
+// - Ret: the return type of the callable object represented by Fn
+//   (like std::invoke_result_t, but we don't need to specify the argument
+//   types because we assume no overloading or templatization of operator())
+//
+// - Arity: the number of arguments of the callable;
+//
+// - Arg<I>: the type of the I-th argument of the callable;
+//
+// - BindArgs<T>: the type T<Args...> where Args... are the arguments
+//   of the callable (T is any template).
+template <class Fn> struct CallableSignature;
+
+template <class R, class S, class... Args>
+struct CallableSignature<R (S::*)(Args...)> {
+    static constexpr const bool IsMemFunPtr = true;
+    static constexpr const size_t Arity = sizeof...(Args);
+
+    template <size_t I>
+    using Arg = std::tuple_element_t<I, std::tuple<Args...>>;
+
+    template <template <class...> class T> using BindArgs = T<Args...>;
+    using Ret = R;
+};
+
+template <class R, class S, class... Args>
+struct CallableSignature<R (S::*)(Args...) noexcept>
+  : CallableSignature<R (S::*)(Args...)> {};
+
+template <class R, class S, class... Args>
+struct CallableSignature<R (S::*)(Args...) const>
+  : CallableSignature<R (S::*)(Args...)> {};
+
+template <class R, class S, class... Args>
+struct CallableSignature<R (S::*)(Args...) const noexcept>
+  : CallableSignature<R (S::*)(Args...)> {};
+
+
+template <class R, class... Args> struct CallableSignature<R (*)(Args...)> {
+    static constexpr const bool IsMemFunPtr = false;
+    static constexpr const size_t Arity = sizeof...(Args);
+    template <size_t I>
+    using Arg = std::tuple_element_t<I, std::tuple<Args...>>;
+    template <template <class...> class T> using BindArgs = T<Args...>;
+    using Ret = R;
+};
+template <class R, class... Args>
+struct CallableSignature<R (*)(Args...) noexcept>
+  : CallableSignature<R (*)(Args...)> {};
+
+template <class T>
+struct CallableSignature<T&&> : CallableSignature<std::remove_cvref_t<T>> {};
+
+template <class Fn>
+struct CallableSignature : CallableSignature<decltype(&Fn::operator())> {
+    static constexpr const bool IsMemFunPtr = false;
+};
 
 
 } // namespace detail

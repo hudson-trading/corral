@@ -26,6 +26,7 @@ add_library(corral INTERFACE
     corral/wait.h
 
     corral/detail/ABI.h
+    corral/detail/exception.h
     corral/detail/frames.h
     corral/detail/introspect.h
     corral/detail/IntrusiveList.h

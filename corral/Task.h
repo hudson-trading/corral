@@ -59,13 +59,18 @@ template <class T = void> class [[nodiscard]] Task : public detail::TaskTag {
     detail::PromisePtr<T> promise_;
 
     friend class Nursery;
-    template <class, class> friend class detail::TryFinally;
+    template <class, class, class...> friend class detail::TryBlock;
 };
 
 namespace detail {
 template <class T> Task<T> Promise<T>::get_return_object() {
     return Task<T>(*this);
 }
+
+struct NoopLambda {
+    Task<void> operator()() const { return Task<void>(*detail::noopPromise()); }
+};
+
 } // namespace detail
 
 /// A no-op task. Always await_ready(), and co_await'ing on it is a no-op
@@ -81,7 +86,7 @@ template <class T> Task<T> Promise<T>::get_return_object() {
 ///
 /// saving on coroutine frame allocation (compared to `{ co_return; }`).
 inline Task<void> noop() {
-    return Task<void>(*detail::noopPromise());
+    return detail::NoopLambda{}();
 }
 
 } // namespace corral

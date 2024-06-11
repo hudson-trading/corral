@@ -566,62 +566,12 @@ class CBPortalProxy {
     bool* completed_ = nullptr;
 };
 
-// TMP boilerplate for untilCBCalled() without supplied portals,
-// deducing types and quantity of required portals from the signature of the
-// callable
-
-// CallableSignature<Fn> is a structure containing two alias declarations:
-// - Ret: the return type of the callable object represented by Fn
-//   (like std::invoke_result_t, but we don't need to specify the argument
-//   types because we assume no overloading or templatization of operator())
-// - BindArgs<T>: the type T<Args...> where Args... are the arguments of the
-//   callable object represented by Fn (T is any template)
-template <class Fn, bool Top> struct CallableSignature;
-
-template <bool Top> struct CallableSignatureCheck {
-    static_assert(!Top,
+template <class Fn> struct CBPortalSignature : CallableSignature<Fn> {
+    static_assert(!CallableSignature<Fn>::IsMemFunPtr,
                   "untilCBCalled() argument must not be a "
                   "member function pointer");
 };
-template <class R, class S, class... Args, bool Top>
-struct CallableSignature<R (S::*)(Args...), Top> : CallableSignatureCheck<Top> {
-    template <template <class...> class T> using BindArgs = T<Args...>;
-    using Ret = R;
-};
-template <class R, class S, class... Args, bool Top>
-struct CallableSignature<R (S::*)(Args...) noexcept, Top>
-  : CallableSignatureCheck<Top> {
-    template <template <class...> class T> using BindArgs = T<Args...>;
-    using Ret = R;
-};
-template <class R, class S, class... Args, bool Top>
-struct CallableSignature<R (S::*)(Args...) const, Top>
-  : CallableSignatureCheck<Top> {
-    template <template <class...> class T> using BindArgs = T<Args...>;
-    using Ret = R;
-};
-template <class R, class S, class... Args, bool Top>
-struct CallableSignature<R (S::*)(Args...) const noexcept, Top>
-  : CallableSignatureCheck<Top> {
-    template <template <class...> class T> using BindArgs = T<Args...>;
-    using Ret = R;
-};
-template <class R, class... Args, bool Top>
-struct CallableSignature<R (*)(Args...), Top> {
-    template <template <class...> class T> using BindArgs = T<Args...>;
-    using Ret = R;
-};
-template <class R, class... Args, bool Top>
-struct CallableSignature<R (*)(Args...) noexcept, Top> {
-    template <template <class...> class T> using BindArgs = T<Args...>;
-    using Ret = R;
-};
-template <class T>
-struct CallableSignature<T&&, true>
-  : CallableSignature<std::remove_cvref_t<T>, true> {};
-template <class Fn, bool Top = true>
-struct CallableSignature : CallableSignature<decltype(&Fn::operator()), false> {
-};
+
 
 // MakePortalFor<CB>::Type is MovableCBPortal<Args...> where Args... are the
 // parameter types of the callable object CB

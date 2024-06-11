@@ -207,6 +207,6 @@ class TaskAwaitable final : public TaskResultStorage<T>,
     }
 };
 
-template <class, class> class TryFinally;
+template <class, class, class...> class TryBlock;
 
 } // namespace corral::detail

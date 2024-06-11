@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include "detail/exception.h"
 #include "detail/wait.h"
 
 namespace corral {
@@ -110,6 +111,10 @@ template <AwaitableRange<> Range> auto mostOf(Range&& range) {
 ///     AsyncThing thing = co_await AsyncThing::create();
 ///     co_await corral::try_([&]() -> corral::Task<> {
 ///         co_await workWithThing();
+///     }).catch_([&](const std::logic_error& e) -> corral::Task<> {
+///         co_await handleLogicError(e);
+///     }).catch_([&](const std::exception& e) -> corral::Task<> {
+///         co_await handleException(e);
 ///     }).finally([&]() -> corral::Task<> {
 ///         co_await thing.destroy();
 ///     });
@@ -119,7 +124,8 @@ template <AwaitableRange<> Range> auto mostOf(Range&& range) {
 template <class TryBlock>
     requires(std::is_invocable_r_v<Task<void>, TryBlock>)
 auto try_(TryBlock&& tryBlock) {
-    return detail::TryFinallyFactory(std::forward<TryBlock>(tryBlock));
+    return detail::TryBlockBuilder<TryBlock>(std::forward<TryBlock>(tryBlock),
+                                             std::make_tuple());
 }
 
 /// Same as above but with a different, slightly more laconic, syntax:
@@ -127,12 +133,29 @@ auto try_(TryBlock&& tryBlock) {
 ///     AsyncThing thing = co_await AsyncThing::create();
 ///     CORRAL_TRY {
 ///         co_await workWithThing();
+///     } CORRAL_CATCH(const std::logic_error& e) {
+///         co_await handleLogicError(e);
+///     } CORRAL_CATCH(const std::exception& e) {
+///         co_await handleException(e);
 ///     } CORRAL_FINALLY {
 ///         co_await thing.destroy();
 ///     }; // <-- the semicolon is required here
 #define CORRAL_TRY                                                             \
-    co_yield ::corral::detail::TryFinallyMacroFactory{} % [&]()                \
+    co_yield ::corral::detail::TryBlockMacroFactory{} % [&]()                  \
             -> ::corral::Task<void>
+#define CORRAL_CATCH(arg) / [&](arg) -> ::corral::Task<void>
 #define CORRAL_FINALLY % [&]() -> ::corral::Task<void>
+
+/// As catch_() takes an asynchronous lambda, it will be executed outside
+/// of a normal C++ catch-block (as catch-blocks are not allowed to suspend),
+/// so `throw` without arguments (normally supposed to re-throw the current
+/// exception) will not work (it will std::terminate the process instead).
+///
+/// Use `co_await corral::rethrow;` to re-throw the current exception instead.
+static constexpr const detail::RethrowCurrentException rethrow;
+
+/// A placeholder type for catch-all clauses in try-blocks
+/// (as `catch_([&](...) -> Task<>` is not allowed in C++).
+using Ellipsis = detail::Ellipsis;
 
 } // namespace corral

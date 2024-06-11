@@ -339,15 +339,28 @@ in order to teach corral how to interact with it.
   implementing asynchronous cleanup handlers, via `co_await anyOf(someTask(),
   untilCancelledAnd(cleanupLogic())`.
 
-* `co_await try_([&]() -> Task<> { /*...*/ }).finally([&]() -> Task<> { /*...*/ });`
-  : A scope allowing asynchronous cleanup. Finally block is guaranteed
-  to execute regardless of whether the try-block exits normally,
-  via an exception, or is cancelled from the outside. Any local variables
-  in the try-block will be destroyed before the finally-block begins
-  execution.
+* ```
+  co_await try_([&]() -> Task<> { /*...*/ })
+          .catch_([&](const ExceptionType1& e) -> Task<> { /*...*/ }
+          .catch_([&](const ExceptionType2& e) -> Task<> { /*...*/ }
+          // more catch_-blocks if needed
+          .finally([&]() -> Task<> { /*...*/ });
+  ```
+  An asynchronous equivalent of a classic try-catch-finally block, which allows
+  any clause to be asynchronous.
 
-* `CORRAL_TRY { /*...*/ } CORRAL_FINALLY { /*...*/ };`
-  : Same as above, but with another, more laconic, syntax.
+  Finally block is guaranteed to execute regardless of whether the try-block
+  exits normally, via an exception, or is cancelled from the outside.
+  Any local variables in the try-block will be destroyed before the finally-block
+  begins execution.
+
+* ```
+  CORRAL_TRY { /*...*/ }
+  CORRAL_CATCH(const ExceptionType1& e) { /*...*/ }
+  CORRAL_CATCH(const ExceptionType2& e) { /*...*/ }
+  CORRAL_FINALLY { /*...*/ };
+  ```
+  Same as above, but with another, more laconic, syntax.
   Note the trailing semicolon, which is required in this case.
 
 * `Awaitable<T> auto noncancellable(Awaitable<T> auto&&)`

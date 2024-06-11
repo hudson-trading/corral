@@ -31,7 +31,10 @@
 namespace corral::detail {
 namespace frame_tags {
 
+static_assert(alignof(CoroutineFrame) >= 4);
+
 #if defined(__x86_64__) || defined(__aarch64__) || defined(_WIN64)
+
 // Allows distinguishing between frames constructed by the library (PROXY
 // frames) vs. real coroutine frames constructed by the compiler.
 //
@@ -43,6 +46,9 @@ constexpr uintptr_t PROXY = 1ull << 63;
 
 // See TaskFrame.
 constexpr uintptr_t TASK = 1ull << 62;
+
+constexpr bool HaveSpareBitsInPC = true;
+
 #elif defined(__arm__) && !defined(__thumb__)
 // ARM processors have several instruction sets. The most-condensed instruction
 // set is called "Thumb" and has 16-bit long instructions:
@@ -69,12 +75,19 @@ constexpr uintptr_t PROXY = 1ul;
 // TASK is only used in PROXY frames. A handle to a coroutine can be linkTo()'d
 // to a PROXY frame. Fortunately, a CoroutineFrame is at least 4-byte aligned,
 // which means we actually have 2 LSB's available for tagging.
-static_assert(alignof(CoroutineFrame) >= 4);
 constexpr uintptr_t TASK = 1ul << 1;
+
+constexpr bool HaveSpareBitsInPC = true;
+
 #else
-#warning "Corral does not support async stack traces for the target platform"
-constexpr uintptr_t PROXY = 0;
-constexpr uintptr_t TASK = 0;
+
+// Unknown architecture, or an architecture known not to have any spare bits
+// in a pointer to a function. We're going to fall back to magic numbers
+// in `destroyFn` to tell between different frame types, and use an extra
+// pointer for a uplink.
+constexpr uintptr_t PROXY = 1;
+constexpr uintptr_t TASK = 2;
+constexpr bool HaveSpareBitsInPC = false;
 #endif
 
 // We use `CoroutineFrame::destroyFn` for storing links between coroutine
@@ -82,9 +95,6 @@ constexpr uintptr_t TASK = 0;
 // stored in `CoroutineFrame::destroyFn`.
 constexpr uintptr_t MASK = PROXY | TASK;
 
-constexpr bool enabled() {
-    return MASK != 0;
-}
 } // namespace frame_tags
 
 // A CoroutineFrame constructed by the library, rather than the compiler.
@@ -94,22 +104,18 @@ constexpr bool enabled() {
 // such as propagate a cancellation instead. We also store a linkage pointer in
 // the otherwise-unused destroyFn field in order to allow extracting async
 // backtraces.
-struct ProxyFrame : public CoroutineFrame {
-  public:
-    static constexpr uintptr_t TAG = frame_tags::PROXY;
+template <bool HaveSpareBitsInPC> struct ProxyFrameImpl;
 
-    ProxyFrame() {
-        // Enable frameCast<ProxyFrame>();
-        tagWith(frame_tags::PROXY);
+template <> struct ProxyFrameImpl<true> : public CoroutineFrame {
+  public:
+    static bool isTagged(uintptr_t tag, CoroutineFrame* f) {
+        uintptr_t fnAddr = reinterpret_cast<uintptr_t>(f->destroyFn);
+        return (fnAddr & tag) == tag;
     }
 
     // Make a link from `this` to `h` such that `h` will be returned from calls
     // to `followLink()`.
     void linkTo(Handle h) {
-        if constexpr (!frame_tags::enabled()) {
-            return;
-        }
-
         uintptr_t handleAddr = reinterpret_cast<uintptr_t>(h.address());
         CORRAL_ASSERT((handleAddr & frame_tags::MASK) == 0);
         uintptr_t fnAddr =
@@ -124,10 +130,6 @@ struct ProxyFrame : public CoroutineFrame {
     // `this` via `linkTo()`. Returns `nullptr` if no task has
     // been linked.
     Handle followLink() const {
-        if constexpr (!frame_tags::enabled()) {
-            return nullptr;
-        }
-
         uintptr_t fnAddr =
                 reinterpret_cast<uintptr_t>(CoroutineFrame::destroyFn);
         return Handle::from_address(
@@ -144,17 +146,53 @@ struct ProxyFrame : public CoroutineFrame {
     }
 };
 
+// A version of the above for architectures not offering any spare bits
+// in function pointers.
+// Since coroutine frames are nevertheless at least 4-byte aligned,
+// we still can reuse lower bits for tags.
+template <> struct ProxyFrameImpl<false> : public CoroutineFrame {
+  public:
+    void linkTo(Handle h) {
+        uintptr_t p = reinterpret_cast<uintptr_t>(h.address());
+        CORRAL_ASSERT((p & frame_tags::MASK) == 0);
+        link_ = (link_ & frame_tags::MASK) | p;
+    }
+
+    Handle followLink() const {
+        return Handle::from_address(
+                reinterpret_cast<void*>(link_ & ~frame_tags::MASK));
+    }
+
+    static bool isTagged(uintptr_t tag, CoroutineFrame* f) {
+        return f->destroyFn == &ProxyFrameImpl::tagFn &&
+               (static_cast<ProxyFrameImpl*>(f)->link_ & tag) == tag;
+    }
+
+  protected:
+    void tagWith(uintptr_t tag) {
+        CoroutineFrame::destroyFn = &ProxyFrameImpl::tagFn;
+        link_ = tag;
+    }
+
+  private:
+    static void tagFn(CoroutineFrame*) {}
+
+  private:
+    uintptr_t link_ = 0;
+};
+
+struct ProxyFrame : public ProxyFrameImpl<frame_tags::HaveSpareBitsInPC> {
+    static constexpr uintptr_t TAG = frame_tags::PROXY;
+    ProxyFrame() { tagWith(TAG); }
+};
+
 // A ProxyFrame that corresponds to an underlying task invocation, used in
 // the implementation of Task. In addition to the CoroutineFrame, it stores a
 // program counter value representing the point at which the task will
 // resume execution.
 struct TaskFrame : ProxyFrame {
     static constexpr uintptr_t TAG = frame_tags::TASK | ProxyFrame::TAG;
-
-    TaskFrame() {
-        // Enable frameCast<TaskFrame>();
-        tagWith(frame_tags::TASK);
-    }
+    TaskFrame() { tagWith(TAG); }
 
     uintptr_t pc = 0;
 };
@@ -162,12 +200,8 @@ struct TaskFrame : ProxyFrame {
 // Attempts a conversion from `CoroutineFrame` to `F`. Returns `nullptr` if `f`
 // does not point to an `F`.
 template <std::derived_from<CoroutineFrame> F> F* frameCast(CoroutineFrame* f) {
-    if (!f || !frame_tags::enabled()) {
-        return nullptr;
-    }
-
-    uintptr_t fnAddr = reinterpret_cast<uintptr_t>(f->destroyFn);
-    return (fnAddr & F::TAG) == F::TAG ? static_cast<F*>(f) : nullptr;
+    return (f && ProxyFrame::isTagged(F::TAG, f)) ? static_cast<F*>(f)
+                                                  : nullptr;
 }
 
 } // namespace corral::detail

@@ -1304,77 +1304,292 @@ CORRAL_TEST_CASE("run-on-cancel") {
     CATCH_CHECK(t.now() == 3ms);
 }
 
-CORRAL_TEST_CASE("try-finally") {
+CORRAL_TEST_CASE("try-blocks") {
     int stage = 0;
     auto checkStage = [&stage](int expected) {
         CATCH_CHECK(stage == expected);
         stage = expected + 1;
     };
+    auto checkStageOnExit = [&](int expected) {
+        return ScopeGuard([expected, checkStage] { checkStage(expected); });
+    };
 
     CATCH_SECTION("normal") {
+        auto g3 = checkStageOnExit(3);
         CORRAL_TRY {
             checkStage(0);
-            ScopeGuard guard([&] { checkStage(1); });
-            co_return;
+            auto g1 = checkStageOnExit(1);
+            co_await yield;
+        }
+        CORRAL_CATCH(std::exception & e) {
+            CATCH_CHECK(!"should not reach here");
+            co_await yield;
         }
         CORRAL_FINALLY {
             checkStage(2);
-            co_return;
+            co_await yield;
         };
-        checkStage(3);
     }
 
     CATCH_SECTION("no-macros") {
+        auto g3 = checkStageOnExit(3);
+        // clang-format off
         co_await try_([&]() -> Task<> {
             checkStage(0);
-            ScopeGuard guard([&] { checkStage(1); });
-            co_return;
+            auto g1 = checkStageOnExit(1);
+            co_await yield;
+        }).catch_([&](std::exception& e) -> Task<> {
+            CATCH_CHECK(!"should not reach here");
+            co_await yield;
         }).finally([&]() -> Task<> {
             checkStage(2);
-            co_return;
+            co_await yield;
         });
-        checkStage(3);
+        // clang-format on
     }
 
-    CATCH_SECTION("exception") {
+    CATCH_SECTION("caught-exception") {
+        auto g4 = checkStageOnExit(4);
+        CORRAL_TRY {
+            checkStage(0);
+            auto g1 = checkStageOnExit(1);
+            co_await t.sleep(1ms);
+            throw std::runtime_error("test");
+        }
+        CORRAL_CATCH(std::exception & e) {
+            checkStage(2);
+            CATCH_CHECK(std::string(e.what()) == "test");
+            co_await yield;
+        }
+        CORRAL_FINALLY {
+            checkStage(3);
+            co_await yield;
+        };
+    }
+
+    CATCH_SECTION("multiple-catch-blocks") {
+        auto g3 = checkStageOnExit(3);
+        CORRAL_TRY {
+            checkStage(0);
+            co_await t.sleep(1ms);
+            throw std::runtime_error("test");
+        }
+        CORRAL_CATCH(std::logic_error & e) {
+            CATCH_CHECK(!"should never reach here");
+            co_await yield;
+        }
+        CORRAL_CATCH(std::runtime_error & e) {
+            checkStage(1);
+            CATCH_CHECK(std::string(e.what()) == "test");
+            co_await yield;
+        }
+        CORRAL_CATCH(std::exception & e) {
+            CATCH_CHECK(!"should never reach here");
+            co_await yield;
+        }
+        CORRAL_FINALLY {
+            checkStage(2);
+            co_await yield;
+        };
+    }
+
+    CATCH_SECTION("catch-all") {
+        auto g2 = checkStageOnExit(2);
+        CORRAL_TRY {
+            checkStage(0);
+            co_await t.sleep(1ms);
+            throw 42;
+        }
+        CORRAL_CATCH(std::exception & e) {
+            CATCH_CHECK(!"should never reach here");
+            co_await yield;
+        }
+        CORRAL_CATCH(Ellipsis) {
+            checkStage(1);
+            co_await yield;
+        };
+    }
+
+    CATCH_SECTION("rethrow-in-catch-block") {
+        auto g4 = checkStageOnExit(4);
+        CORRAL_TRY {
+            checkStage(0);
+            co_await yield;
+            throw std::runtime_error("test");
+        }
+        CORRAL_CATCH(Ellipsis) {
+            try {
+                checkStage(1);
+                co_await rethrow;
+            } catch (std::runtime_error& e) {
+                checkStage(2);
+                CATCH_CHECK(std::string(e.what()) == "test");
+            }
+            checkStage(3);
+        };
+    }
+
+    CATCH_SECTION("rethrow-indirect-nursery") {
+        auto g3 = checkStageOnExit(3);
         try {
             CORRAL_TRY {
                 checkStage(0);
-                ScopeGuard guard([&] { checkStage(1); });
+                co_await yield;
+                throw std::runtime_error("test");
+            }
+            CORRAL_CATCH(Ellipsis) {
+                CORRAL_WITH_NURSERY(n) {
+                    n.start([&]() -> Task<> {
+                        checkStage(1);
+                        co_await rethrow;
+                    });
+                    co_return join;
+                };
+            };
+        } catch (std::runtime_error& e) {
+            checkStage(2);
+            CATCH_CHECK(std::string(e.what()) == "test");
+        }
+    }
+
+    CATCH_SECTION("rethrow-nested") {
+        auto g4 = checkStageOnExit(4);
+        CORRAL_TRY {
+            checkStage(0);
+            co_await yield;
+            throw std::runtime_error("test");
+        }
+        CORRAL_CATCH(Ellipsis) {
+            checkStage(1);
+            CORRAL_TRY {
+                checkStage(2);
+                co_await rethrow;
+            }
+            CORRAL_CATCH(std::runtime_error & e) {
+                checkStage(3);
+                CATCH_CHECK(std::string(e.what()) == "test");
+                co_await yield;
+            };
+        };
+    }
+
+    CATCH_SECTION("no-finally-block") {
+        auto g2 = checkStageOnExit(2);
+        CORRAL_TRY {
+            checkStage(0);
+            co_await t.sleep(1ms);
+            throw std::runtime_error("test");
+        }
+        CORRAL_CATCH(std::exception & e) {
+            checkStage(1);
+            CATCH_CHECK(std::string(e.what()) == "test");
+            co_await yield;
+        };
+    }
+
+    CATCH_SECTION("no-finally-no-macros") {
+        auto g2 = checkStageOnExit(2);
+        // clang-format off
+        co_await try_([&]() -> Task<> {
+            checkStage(0);
+            co_await t.sleep(1ms);
+            throw std::runtime_error("test");
+        }).catch_([&](std::exception& e) -> Task<> {
+            checkStage(1);
+            CATCH_CHECK(std::string(e.what()) == "test");
+            co_await yield;
+        });
+        // clang-format on
+    }
+
+    CATCH_SECTION("uncaught-exception") {
+        auto g4 = checkStageOnExit(4);
+        try {
+            CORRAL_TRY {
+                checkStage(0);
+                auto g1 = checkStageOnExit(1);
                 co_await t.sleep(1ms);
                 throw std::runtime_error("test");
             }
             CORRAL_FINALLY {
                 checkStage(2);
-                co_return;
+                co_await yield;
             };
         } catch (std::exception&) { checkStage(3); }
-        checkStage(4);
+    }
+
+    CATCH_SECTION("reraised") {
+        auto g4 = checkStageOnExit(4);
+        std::exception* ex = nullptr;
+        try {
+            CORRAL_TRY {
+                checkStage(0);
+                co_await t.sleep(1ms);
+                throw std::runtime_error("test");
+            }
+            CORRAL_CATCH(std::exception & e) {
+                checkStage(1);
+                ex = &e;
+                co_await rethrow;
+            }
+            CORRAL_FINALLY {
+                checkStage(2);
+                co_await yield;
+            };
+        } catch (std::runtime_error& e) {
+            checkStage(3);
+            CATCH_CHECK(ex == &e);
+            CATCH_CHECK(std::string(e.what()) == "test");
+        }
+    }
+
+    CATCH_SECTION("raised-different") {
+        auto g4 = checkStageOnExit(4);
+        try {
+            CORRAL_TRY {
+                checkStage(0);
+                co_await t.sleep(1ms);
+                throw std::runtime_error("test1");
+            }
+            CORRAL_CATCH(std::exception & e) {
+                checkStage(1);
+                co_await t.sleep(1ms);
+                throw std::logic_error("test2");
+            }
+            CORRAL_FINALLY {
+                checkStage(2);
+                co_await yield;
+            };
+        } catch (std::logic_error& e) {
+            checkStage(3);
+            CATCH_CHECK(std::string(e.what()) == "test2");
+        }
     }
 
     CATCH_SECTION("sync-exception") {
         // Make sure finally block is executed even if try-block
         // is not a coroutine
+        auto g4 = checkStageOnExit(4);
         try {
             CORRAL_TRY {
                 checkStage(0);
-                ScopeGuard guard([&] { checkStage(1); });
+                auto g1 = checkStageOnExit(1);
                 throw std::runtime_error("test");
                 // no co_return or co_await here
             }
             CORRAL_FINALLY {
                 checkStage(2);
-                co_return;
+                co_await yield;
             };
         } catch (std::exception&) { checkStage(3); }
-        checkStage(4);
     }
 
     CATCH_SECTION("cancellation") {
+        auto g5 = checkStageOnExit(5);
         auto [_, done] = co_await anyOf(t.sleep(2ms), [&]() -> Task<> {
             CORRAL_TRY {
                 checkStage(0);
-                ScopeGuard guard([&] { checkStage(2); });
+                auto g1 = checkStageOnExit(2);
                 co_await untilCancelledAnd([&]() -> Task<> {
                     checkStage(1);
                     co_await t.sleep(1ms);
@@ -1391,6 +1606,7 @@ CORRAL_TEST_CASE("try-finally") {
     }
 
     CATCH_SECTION("early-cancel") {
+        auto g2 = checkStageOnExit(2);
         CORRAL_WITH_NURSERY(n) {
             n.cancel();
 
@@ -1404,7 +1620,6 @@ CORRAL_TEST_CASE("try-finally") {
             };
             co_return join;
         };
-        checkStage(2);
         CATCH_CHECK(t.now() == 1ms);
     }
 }
@@ -1486,10 +1701,6 @@ Task<void> stackTraceHelper(int depth, const RawStack& caller) {
 }
 
 CORRAL_TEST_CASE("async-stack-trace") {
-    if (!detail::frame_tags::enabled()) {
-        co_return;
-    }
-
     RawStack stack0;
     co_await AsyncStackTrace(std::back_inserter(stack0));
     CATCH_REQUIRE(stack0.size() == 2);
@@ -1513,10 +1724,6 @@ CORRAL_TEST_CASE("async-stack-trace") {
 }
 
 CORRAL_TEST_CASE("frames") {
-    if (!detail::frame_tags::enabled()) {
-        co_return;
-    }
-
     using detail::CoroutineFrame;
     using detail::frameCast;
     using detail::ProxyFrame;

@@ -41,6 +41,7 @@ namespace corral::detail {
 class BasePromise;
 template <class T> class Promise;
 class NurseryScopeBase {};
+class RethrowCurrentException;
 
 /// An object that can serve as the parent of a task. It receives the task's
 /// result (value, exception, or cancellation) and can indicate where
@@ -453,10 +454,13 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
         // (rather than moving) an incoming Awaitee&& that is
         // ImmediateAwaitable; even if it's a temporary, it will live for
         // the entire co_await expression including suspension.
+
         using Ret = decltype(getAwaitable(std::forward<Awaitee>(awaitee)));
         return AwaitProxy<Ret>(this,
                                getAwaitable(std::forward<Awaitee>(awaitee)));
     }
+
+    friend RethrowCurrentException;
 };
 
 template <class T> class Promise;
