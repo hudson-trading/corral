@@ -7,30 +7,48 @@ on:
 
 jobs:
   ci_linux:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     strategy:
       fail-fast: false
 
       matrix:
         variant:
-          - gcc
-          - clang
+          - gcc-12
+          - gcc-13
+          - gcc-14
+          - clang-15
+          - clang-16
           - gcc-arm32
           - gcc-arm32-thumb
           - gcc-aarch64
           - msvc-wine
 
         include:
-          - variant: gcc
+          - variant: gcc-12
             deps: g++-12
             cc: gcc-12
             cxx: g++-12
 
-          - variant: clang
-            deps: clang-15
+          - variant: gcc-13
+            deps: g++-13
+            cc: gcc-13
+            cxx: g++-13
+
+          - variant: gcc-14
+            deps: g++-14
+            cc: gcc-14
+            cxx: g++-14
+
+          - variant: clang-15
+            deps: clang-15 g++-13 libstdc++-14-dev- libgcc-14-dev-
             cc: clang-15
             cxx: clang++-15
+
+          - variant: clang-16
+            deps: clang-16
+            cc: clang-16
+            cxx: clang++-16
 
           - variant: gcc-arm32
             deps: g++-12-arm-linux-gnueabihf qemu-user-static
@@ -61,7 +79,6 @@ jobs:
             deps: >
               wine64 wine64-preloader wine64-tools python3 msitools
               python3-simplejson python3-six ca-certificates winbind
-              cmake{,-data}=3.22.1-1ubuntu1
 
             init: |
               cd /usr/bin
@@ -84,16 +101,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # TODO: remove this after 24.04 releases to GA
-      - name: Bump to 24.04
-        run: |
-          cd /etc/apt && sed s/jammy/noble/ sources.list | sudo tee sources.list.d/noble.list >/dev/null
-          sudo apt-get -q -q update
-
       - name: Install dependencies
         run: |
           sudo apt-get -q -q update
-          sudo apt-get install -q -q -y git libboost1.83-dev ${{ matrix.deps }}
+          sudo apt-get install -q -q -y make cmake git libboost1.83-dev ${{ matrix.deps }}
           sudo mkdir -p /opt/include
           sudo cp -r /usr/include/boost /opt/include
 
