@@ -1202,6 +1202,33 @@ CORRAL_TEST_CASE("value") {
 CORRAL_TEST_CASE("noop") {
     co_await noop();
     co_await anyOf(noop(), noop());
+    CORRAL_WITH_NURSERY(n) {
+        n.start(noop);
+        co_return join;
+    };
+}
+
+CORRAL_TEST_CASE("just") {
+    auto mkAsync = [](int n) { return [n]() -> Task<int> { return just(n); }; };
+    auto x = co_await mkAsync(42)();
+    CATCH_CHECK(x == 42);
+
+    auto [y, z] = co_await allOf(mkAsync(1)(), mkAsync(2)());
+    CATCH_CHECK(y == 1);
+    CATCH_CHECK(z == 2);
+
+    int i;
+    int& ri = co_await just<int&>(i);
+    CATCH_CHECK(&ri == &i);
+
+    auto p = std::make_unique<int>(42);
+    auto q = co_await just(std::move(p));
+    CATCH_CHECK(p == nullptr);
+    CATCH_CHECK(*q == 42);
+
+    auto& rq = co_await just<std::unique_ptr<int>&>(q);
+    CATCH_CHECK(*q == 42);
+    CATCH_CHECK(*rq == 42);
 }
 
 CORRAL_TEST_CASE("executor") {

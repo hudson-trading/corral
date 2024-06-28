@@ -308,11 +308,6 @@ inline Handle Nursery::addTask(Task<Ret> task, TaskParent<Ret>* parent) {
     CORRAL_ASSERT(executor_ && "Nursery is closed to new arrivals");
 
     detail::Promise<Ret>* promise = task.release();
-    if constexpr (std::is_void_v<Ret>) {
-        if (promise == detail::noopPromise()) [[unlikely]] {
-            return std::noop_coroutine();
-        }
-    }
     CORRAL_ASSERT(promise);
     CORRAL_TRACE("pr %p handed to nursery %p (%zu tasks total)", promise, this,
                  taskCount_ + 1);

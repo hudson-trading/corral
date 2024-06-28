@@ -66,11 +66,6 @@ namespace detail {
 template <class T> Task<T> Promise<T>::get_return_object() {
     return Task<T>(*this);
 }
-
-struct NoopLambda {
-    Task<void> operator()() const { return Task<void>(*detail::noopPromise()); }
-};
-
 } // namespace detail
 
 /// A no-op task. Always await_ready(), and co_await'ing on it is a no-op
@@ -86,7 +81,12 @@ struct NoopLambda {
 ///
 /// saving on coroutine frame allocation (compared to `{ co_return; }`).
 inline Task<void> noop() {
-    return detail::NoopLambda{}();
+    return Task<void>(detail::StubPromise<void>::instance());
+}
+
+/// Create a task that immediately returns a given value when co_await'ed.
+template <class T> Task<T> just(T value) {
+    return Task<T>(*new detail::StubPromise<T>(std::forward<T>(value)));
 }
 
 } // namespace corral

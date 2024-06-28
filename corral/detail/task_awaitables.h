@@ -40,49 +40,27 @@ template <class T, class Self> class TaskAwaitableBase {
     explicit TaskAwaitableBase(Promise<T>* promise) : promise_(promise) {}
 
     void await_set_executor(Executor* ex) noexcept {
-        if constexpr (std::is_same_v<T, void>) {
-            if (promise_ == detail::noopPromise()) [[unlikely]] {
-                return;
-            }
-        }
         promise_->setExecutor(ex);
     }
 
     bool await_early_cancel() noexcept {
-        if constexpr (std::is_same_v<T, void>) {
-            if (promise_ == detail::noopPromise()) [[unlikely]] {
-                return true;
-            }
-        }
         promise_->cancel();
         return false;
     }
 
     bool await_ready() const noexcept {
-        if constexpr (std::is_same_v<T, void>) {
-            if (promise_ == detail::noopPromise()) [[unlikely]] {
-                return true;
-            }
-        }
-        return false;
+        return promise_->checkImmediateResult(
+                       const_cast<Self*>(static_cast<const Self*>(this)));
     }
 
     Handle await_suspend(Handle h) {
         CORRAL_TRACE("    ...pr %p", promise_);
-        if constexpr (std::is_same_v<T, void>) {
-            if (promise_ == detail::noopPromise()) [[unlikely]] {
-                return h;
-            }
-        }
         CORRAL_ASSERT(promise_);
         continuation_ = h;
         return promise_->start(static_cast<Self*>(this), h);
     }
 
     bool await_cancel(Handle) noexcept {
-        if constexpr (std::is_same_v<T, void>) {
-            CORRAL_ASSERT(promise_ != detail::noopPromise());
-        }
         if (promise_) {
             promise_->cancel();
         } else {
@@ -96,12 +74,6 @@ template <class T, class Self> class TaskAwaitableBase {
         if (!promise_) {
             c.node("<completed task>");
             return;
-        }
-        if constexpr (std::is_same_v<T, void>) {
-            if (promise_ == detail::noopPromise()) [[unlikely]] {
-                c.node("<noop>");
-                return;
-            }
         }
         promise_->await_introspect(c);
     }
