@@ -26,27 +26,27 @@ jobs:
 
         include:
           - variant: gcc-12
-            deps: g++-12
+            deps: g++-12 libssl-dev
             cc: gcc-12
             cxx: g++-12
 
           - variant: gcc-13
-            deps: g++-13
+            deps: g++-13 libssl-dev
             cc: gcc-13
             cxx: g++-13
 
           - variant: gcc-14
-            deps: g++-14
+            deps: g++-14 libssl-dev
             cc: gcc-14
             cxx: g++-14
 
           - variant: clang-15
-            deps: clang-15 g++-13 libstdc++-14-dev- libgcc-14-dev-
+            deps: clang-15 g++-13 libstdc++-14-dev- libgcc-14-dev- libssl-dev
             cc: clang-15
             cxx: clang++-15
 
           - variant: clang-16
-            deps: clang-16
+            deps: clang-16 libssl-dev
             cc: clang-16
             cxx: clang++-16
 

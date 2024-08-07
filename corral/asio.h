@@ -22,6 +22,7 @@
 //
 // SPDX-License-Identifier: MIT
 
+#pragma once
 
 #include <chrono>
 
@@ -280,10 +281,10 @@ class async_result<::corral::detail::asio_awaitable_t<Executor, ThrowOnError>,
     static auto initiate(
             Init&& init,
             ::corral::detail::asio_awaitable_t<Executor, ThrowOnError>,
-            Args&&... args) {
+            Args... args) {
         return ::corral::detail::AsioAwaitable<ThrowOnError, Init,
                                                std::tuple<Args...>, Ret...>(
-                std::forward<Init>(init), std::forward<Args>(args)...);
+                std::forward<Init>(init), std::move(args)...);
     }
 };
 

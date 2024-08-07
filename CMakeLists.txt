@@ -45,6 +45,7 @@ add_library(corral INTERFACE
 target_include_directories(corral INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 option(CORRAL_TEST_RUNNER "Use this wrapper for running tests" "")
+option(CORRAL_XBUILD "Do not pull any features unavailable while cross-compiling" "")
 
 option(
     CORRAL_CATCH2
@@ -89,14 +90,21 @@ if(NOT ("${CORRAL_BOOST}" STREQUAL ""))
         FetchContent_MakeAvailable(Boost)
     else()
         set(Boost_INCLUDE_DIR "${CORRAL_BOOST}")
-        find_package(
-            Boost 1.77.0 REQUIRED
-        )
+        find_package(Boost 1.77.0 REQUIRED)
     endif()
 
     add_executable(corral_asio_test test/asio_test.cc test/helpers.h)
     target_link_libraries(corral_asio_test PRIVATE corral Catch2::Catch2)
     target_compile_definitions(corral_asio_test PRIVATE CATCH_CONFIG_MAIN)
+
+    if("${CORRAL_TEST_RUNNER}" STREQUAL "")
+        find_package(OpenSSL)
+        if(OpenSSL_FOUND)
+            target_compile_definitions(corral_asio_test PRIVATE CORRAL_HAVE_OPENSSL)
+            target_link_libraries(corral_asio_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+        endif()
+    endif()
+
     add_test(NAME corral_asio_test COMMAND ${CORRAL_TEST_RUNNER} corral_asio_test)
 endif()
 
