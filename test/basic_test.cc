@@ -824,6 +824,25 @@ CORRAL_TEST_CASE("cb-return-type") {
     CATCH_CHECK(&rr == &x);
 }
 
+CORRAL_TEST_CASE("cb-reflike") {
+    std::function<void(const std::string&)> cb;
+    co_await allOf(
+            [&]() -> Task<> {
+                auto portal = std::make_unique<CBPortal<const std::string&>>();
+                std::string s = co_await untilCBCalled(
+                        [&](std::function<void(const std::string&)> c) {
+                            cb = c;
+                        },
+                        *portal);
+                CATCH_CHECK(s == "hello");
+                portal.reset();
+            },
+            [&]() -> Task<> {
+                co_await t.sleep(1ms);
+                cb("hello");
+            });
+}
+
 template <class T> class MyLightweightFn;
 template <class... Args> class MyLightweightFn<void(Args...)> {
     void (*fn_)(size_t, Args...);

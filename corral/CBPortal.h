@@ -48,15 +48,6 @@ template <> struct MaybeTuple<> {
     static void fromTuple(std::tuple<>&&) {}
 };
 
-// Heuristics for identifying arguments to the CBPortal bridge callback
-// that might be invalid to use after the callback has returned.
-template <class T> constexpr bool LooksLikeReference = false;
-template <class T> constexpr bool LooksLikeReference<T&> = true;
-template <class T> constexpr bool LooksLikeReference<T&&> = true;
-template <class T> constexpr bool LooksLikeReference<T*> = true;
-template <class T> constexpr bool LooksLikeReference<std::span<T>> = true;
-template <> constexpr inline bool LooksLikeReference<std::string_view> = true;
-
 template <class InitiateFn, class CancelFn, class... CBPortals>
 class CBPortalProxy;
 enum class CBPortalProxyStatus : uint8_t;
@@ -356,13 +347,7 @@ template <class... Ts>
 void CBPortal<Ts...>::Callback::operator()(Ts... values) const {
     CORRAL_ASSERT(!portal_->value_.has_value() && "consumer not keeping up");
     portal_->value_.emplace(std::forward<Ts>(values)...);
-    portal_->wakeUp();
-    if constexpr ((detail::LooksLikeReference<Ts> || ...)) {
-        CORRAL_ASSERT(!portal_->value_.has_value() &&
-                      "reference arguments will dangle if not consumed "
-                      "immediately; are you combining CBPortals using "
-                      "something other than anyOf() with only CBPortal args?");
-    }
+    portal_->wakeUp(); // may destroy `portal_`
 }
 
 template <class... Ts> void CBPortal<Ts...>::wakeUp() {
