@@ -116,9 +116,9 @@ template <std::output_iterator<uintptr_t> OutIter> class AsyncStackTrace {
 ///        //     (assuming sleep doesn't throw an exception)
 ///    });
 ///    // ... and so is this one
-template <class Awaitable> auto noncancellable(Awaitable&& awaitable) {
-    return detail::CancellableAdapter<detail::AwaitableType<Awaitable>>(
-            detail::getAwaitable(std::forward<Awaitable>(awaitable)));
+template <class Awaitable> auto noncancellable(Awaitable awaitable) {
+    return detail::CancellableAdapter<Awaitable>(
+            std::forward<Awaitable>(awaitable));
 }
 
 /// A wrapper around an awaitable declaring that its return value
@@ -128,9 +128,9 @@ template <class Awaitable> auto noncancellable(Awaitable&& awaitable) {
 /// result in the awaitable completing any faster when cancelled;
 /// it only affects what happens _after the awaitable completes_
 /// when a cancellation has been requested.
-template <class Awaitable> auto disposable(Awaitable&& awaitable) {
-    return detail::DisposableAdapter<detail::AwaitableType<Awaitable>>(
-            detail::getAwaitable(std::forward<Awaitable>(awaitable)));
+template <class Awaitable> auto disposable(Awaitable awaitable) {
+    return detail::DisposableAdapter<Awaitable>(
+            std::forward<Awaitable>(awaitable));
 }
 
 /// A wrapper that adapts an awaitable so it runs upon cancellation

@@ -646,13 +646,14 @@ template <class Aw> struct AwaitableAdapter {
 
 
 /// A common part for corral::noncancellable() and corral::disposable().
-template <class Aw> class CancellableAdapter {
+template <class T> class CancellableAdapter {
   public:
-    explicit CancellableAdapter(Aw&& awaitable)
-      : awaitable_(std::forward<Aw>(awaitable)) {}
+    explicit CancellableAdapter(T&& object)
+      : object_(std::forward<T>(object)),
+        awaitable_(getAwaitable(std::forward<T>(object_))) {}
 
     void await_set_executor(Executor* ex) noexcept {
-        if constexpr (NeedsExecutor<Aw>) {
+        if constexpr (NeedsExecutor<AwaitableType<T>>) {
             awaitable_.await_set_executor(ex);
         }
     }
@@ -672,18 +673,19 @@ template <class Aw> class CancellableAdapter {
     }
 
   protected:
-    Aw awaitable_;
+    T object_;
+    AwaitableType<T> awaitable_;
 };
 
 /// A wrapper around an awaitable declaring that its return value
 /// is safe to dispose of upon cancellation.
 /// May be used on third party awaitables which don't know about
 /// corral async's cancellation mechanism.
-template <class Aw>
-class DisposableAdapter : public detail::CancellableAdapter<Aw> {
+template <class T>
+class DisposableAdapter : public detail::CancellableAdapter<T> {
   public:
-    explicit DisposableAdapter(Aw&& awaitable)
-      : detail::CancellableAdapter<Aw>(std::forward<Aw>(awaitable)) {}
+    explicit DisposableAdapter(T&& object)
+      : detail::CancellableAdapter<T>(std::forward<T>(object)) {}
 
     auto await_early_cancel() noexcept {
         return awaitEarlyCancel(this->awaitable_);

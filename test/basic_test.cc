@@ -644,6 +644,12 @@ CORRAL_TEST_CASE("mux-cancel-done") {
     };
 }
 
+CORRAL_TEST_CASE("noncancellable-task-return") {
+    auto t1 = [&]() -> Task<> { co_await t.sleep(1ms); };
+    auto t2 = [&] { return corral::noncancellable(t1()); };
+    co_await t2();
+}
+
 CORRAL_TEST_CASE("return-types") {
     int x = 42;
     const int cx = 43;
