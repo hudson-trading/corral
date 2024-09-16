@@ -66,6 +66,40 @@ namespace detail {
 template <class T> Task<T> Promise<T>::get_return_object() {
     return Task<T>(*this);
 }
+
+/// A non-cancellable awaitable which is immediately ready, producing a
+/// value of type T. It can also be implicitly converted to a Task<T>.
+template <class T> class ReadyAwaitable {
+  public:
+    explicit ReadyAwaitable(T&& value) : value_(std::forward<T>(value)) {}
+
+    bool await_early_cancel() const noexcept { return false; }
+    bool await_ready() const noexcept { return true; }
+    bool await_suspend(Handle) { return false; }
+    bool await_cancel(Handle) const { return false; }
+    bool await_must_resume() const noexcept { return true; }
+    T await_resume() && { return std::forward<T>(value_); }
+
+    template <std::constructible_from<T> U> operator Task<U>() && {
+        return Task<U>(*new StubPromise<U>(std::forward<T>(value_)));
+    }
+
+  private:
+    T value_;
+};
+
+template <> class ReadyAwaitable<void> {
+  public:
+    bool await_early_cancel() const noexcept { return false; }
+    bool await_ready() const noexcept { return true; }
+    bool await_suspend(Handle) { return false; }
+    bool await_cancel(Handle) const { return false; }
+    bool await_must_resume() const noexcept { return true; }
+    void await_resume() && {}
+
+    operator Task<void>() { return Task<void>(StubPromise<void>::instance()); }
+};
+
 } // namespace detail
 
 /// A no-op task. Always await_ready(), and co_await'ing on it is a no-op
@@ -80,13 +114,13 @@ template <class T> Task<T> Promise<T>::get_return_object() {
 ///     };
 ///
 /// saving on coroutine frame allocation (compared to `{ co_return; }`).
-inline Task<void> noop() {
-    return Task<void>(detail::StubPromise<void>::instance());
+inline Awaitable<void> auto noop() {
+    return detail::ReadyAwaitable<void>();
 }
 
 /// Create a task that immediately returns a given value when co_await'ed.
-template <class T> Task<T> just(T value) {
-    return Task<T>(*new detail::StubPromise<T>(std::forward<T>(value)));
+template <class T> Awaitable<T> auto just(T value) {
+    return detail::ReadyAwaitable<T>(std::forward<T>(value));
 }
 
 } // namespace corral

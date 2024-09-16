@@ -217,6 +217,25 @@ struct ReadyCancellable {
     auto await_cancel(Handle) noexcept { return std::true_type{}; }
 };
 
+struct LValueQualifiedImm {
+    bool await_ready() const noexcept { return true; }
+    void await_suspend(Handle) noexcept { CORRAL_ASSERT_UNREACHABLE(); }
+    int await_resume() & { return 42; }
+};
+
+struct RValueQualifiedImm {
+    bool await_ready() const noexcept { return true; }
+    void await_suspend(Handle) noexcept { CORRAL_ASSERT_UNREACHABLE(); }
+    int await_resume() && { return 42; }
+};
+
+struct LValueQualified {
+    auto operator co_await() & { return RValueQualifiedImm{}; }
+};
+struct RValueQualified {
+    auto operator co_await() && { return RValueQualifiedImm{}; }
+};
+
 //
 // Tests
 //
@@ -1225,10 +1244,12 @@ CORRAL_TEST_CASE("value") {
 }
 
 CORRAL_TEST_CASE("noop") {
+    auto mkNoop = []() -> Task<> { return noop(); };
     co_await noop();
-    co_await anyOf(noop(), noop());
+    co_await mkNoop();
+    co_await anyOf(mkNoop(), mkNoop());
     CORRAL_WITH_NURSERY(n) {
-        n.start(noop);
+        n.start(mkNoop);
         co_return join;
     };
 }
@@ -2036,6 +2057,154 @@ CORRAL_TEST_CASE("unbounded-channel") {
         // More writes will fail
         sent = co_await channel.send(2);
         CATCH_CHECK(!sent);
+    }
+}
+
+CORRAL_TEST_CASE("sequence") {
+    CATCH_SECTION("smoke") {
+        co_await (t.sleep(2ms) | then([&] { return t.sleep(3ms); }));
+        CATCH_CHECK(t.now() == 5ms);
+    }
+
+    CATCH_SECTION("value") {
+        auto r = co_await (just(42) | then([](int v) { return just(v + 1); }));
+        CATCH_CHECK(r == 43);
+    }
+
+    CATCH_SECTION("reference") {
+        int arr[2] = {1, 2};
+        auto r = co_await (just<int&>(arr[0]) |
+                           then([](int& v) { return just(&v + 1); }));
+        CATCH_CHECK(r == &arr[1]);
+    }
+
+    CATCH_SECTION("void") {
+        co_await (noop() | then([] { return noop(); }));
+    }
+
+    CATCH_SECTION("task") {
+        auto r = co_await ([]() -> Task<int> {
+            co_return 42;
+        } | then([](int v) -> Task<int> { co_return v + 1; }));
+        CATCH_CHECK(r == 43);
+    }
+
+    CATCH_SECTION("exc1") {
+        CATCH_CHECK_THROWS(co_await ([]() -> Task<> {
+            co_await yield;
+            throw std::runtime_error("test");
+        } | then([] { return just(42); })));
+    }
+
+    CATCH_SECTION("exc2") {
+        CATCH_CHECK_THROWS(co_await (just(42) | then([](int) -> Task<void> {
+                                         throw std::runtime_error("test");
+                                     })));
+    }
+
+    CATCH_SECTION("exc3") {
+        CATCH_CHECK_THROWS(co_await (just(42) | then([](int) -> Task<int> {
+                                         co_await yield;
+                                         throw std::runtime_error("test");
+                                     })));
+    }
+
+    CATCH_SECTION("cancel1") {
+        auto [r, _] = co_await anyOf(t.sleep(3ms) | then([] {
+                                         CATCH_CHECK(!"should not reach here");
+                                         return noop();
+                                     }),
+                                     t.sleep(1ms));
+        CATCH_CHECK(t.now() == 1ms);
+        CATCH_CHECK(!r);
+    }
+
+    CATCH_SECTION("cancel2") {
+        auto [r, _] = co_await anyOf(
+                t.sleep(1ms) | then([&t] { return t.sleep(3ms); }) | then([] {
+                    CATCH_CHECK(!"should not reach here");
+                    return noop();
+                }),
+                t.sleep(2ms));
+        CATCH_CHECK(t.now() == 2ms);
+        CATCH_CHECK(!r);
+    }
+
+    CATCH_SECTION("cancel3") {
+        Event evt;
+        co_await anyOf(evt, t.sleep(1ms) | then([&] {
+                                evt.trigger();
+                                return t.sleep(3ms);
+                            }));
+    }
+
+    CATCH_SECTION("noncancellable1") {
+        auto [r, _] = co_await anyOf(t.sleep(2ms, noncancellable) |
+                                             then([] { return just(42); }),
+                                     t.sleep(1ms));
+        CATCH_CHECK(t.now() == 2ms);
+        CATCH_CHECK(*r == 42);
+    }
+
+    CATCH_SECTION("noncancellable2") {
+        auto [r, _] = co_await anyOf(t.sleep(1ms) | then([&t] {
+                                         return t.sleep(3ms, noncancellable);
+                                     }),
+                                     t.sleep(2ms));
+        CATCH_CHECK(t.now() == 4ms);
+        CATCH_CHECK(r);
+    }
+
+    CATCH_SECTION("noncancellable3") {
+        // The second awaitable is noncancellable, so should complete,
+        // and the lambda should be invoked. However, as the awaitable
+        // returned by the lambda is early-cancellable, it should not be
+        // suspended on.
+        bool started = false;
+        auto [r, _] = co_await anyOf(t.sleep(2ms, noncancellable) | then([&] {
+                                         started = true;
+                                         return t.sleep(2ms);
+                                     }),
+                                     t.sleep(1ms));
+        CATCH_CHECK(t.now() == 2ms);
+        CATCH_CHECK(started);
+        CATCH_CHECK(!r);
+    }
+
+    CATCH_SECTION("lifetime") {
+        Semaphore sem{1};
+        co_await allOf(sem.lock() | then([&t] { return t.sleep(5ms); }),
+                       [&]() -> Task<> {
+                           co_await t.sleep(1ms);
+                           auto lk = co_await sem.lock();
+                           CATCH_CHECK(t.now() == 5ms);
+                       });
+    }
+
+    CATCH_SECTION("chaining1") {
+        auto r = co_await (just(42) | then([](int v) { return just(v + 1); }) |
+                           then([](int v) { return just(v + 1); }));
+        CATCH_CHECK(r == 44);
+    }
+
+    CATCH_SECTION("chaining2") {
+        auto r =
+                co_await (just(42) | (then([](int v) { return just(v + 1); }) |
+                                      then([](int v) { return just(v + 1); })));
+        CATCH_CHECK(r == 44);
+    }
+
+    CATCH_SECTION("qualifications") {
+        LValueQualifiedImm lvqi;
+        LValueQualified lvq;
+        int r = co_await (noop() | then([&]() -> auto& { return lvqi; }));
+        CATCH_CHECK(r == 42);
+        r = co_await (noop() | then([] { return RValueQualifiedImm{}; }));
+        CATCH_CHECK(r == 42);
+        r = co_await (noop() | then([&]() -> auto& { return lvq; }));
+        CATCH_CHECK(r == 42);
+        r = co_await (noop() | then([] { return RValueQualified{}; }));
+        CATCH_CHECK(r == 42);
     }
 }
 

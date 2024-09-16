@@ -50,7 +50,7 @@ template <class T, class Self> class TaskAwaitableBase {
 
     bool await_ready() const noexcept {
         return promise_->checkImmediateResult(
-                       const_cast<Self*>(static_cast<const Self*>(this)));
+                const_cast<Self*>(static_cast<const Self*>(this)));
     }
 
     Handle await_suspend(Handle h) {

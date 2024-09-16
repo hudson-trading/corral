@@ -68,9 +68,11 @@ concept ImmediateAwaitable = requires(T t, const T ct, Handle h) {
 template <class T, class Ret = detail::Unspecified>
 concept Awaitable =
     detail::ImmediateAwaitable<T, Ret>
-    || requires(T t) { { t.operator co_await() } -> detail::ImmediateAwaitable<Ret>; }
-    || requires(T t) { { operator co_await(t) } -> detail::ImmediateAwaitable<Ret>; }
-    || detail::ThisIsAwaitableTrustMe<T, Ret>;
+    || requires(T t) {
+        { std::forward<T>(t).operator co_await() } -> detail::ImmediateAwaitable<Ret>;
+    } || requires(T t) {
+        { operator co_await(std::forward<T>(t)) } -> detail::ImmediateAwaitable<Ret>;
+    } || detail::ThisIsAwaitableTrustMe<T, Ret>;
 
 template <class R, class Ret = detail::Unspecified>
 concept AwaitableRange = requires(R r) {

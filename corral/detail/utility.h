@@ -58,10 +58,8 @@ struct TaskTag {};
 
 /// Like std::conditional, but for templates.
 template <bool If,
-          template <class...>
-          class Then,
-          template <class...>
-          class Else>
+          template <class...> class Then,
+          template <class...> class Else>
 struct ConditionalTmpl {
     template <class... Args> using With = Then<Args...>;
 };
@@ -588,7 +586,7 @@ template <class Aw> struct AwaitableAdapter {
         return checker_.readyReturned(awaitable_.await_ready());
     }
 
-    Handle await_suspend(Handle h) {
+    [[nodiscard]] Handle await_suspend(Handle h) {
 #ifdef CORRAL_AWAITABLE_STATE_DEBUG
         try {
             return awaitSuspend(awaitable_, checker_.aboutToSuspend(h));

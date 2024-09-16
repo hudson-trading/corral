@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include "detail/Sequence.h"
 #include "detail/exception.h"
 #include "detail/wait.h"
 
@@ -157,5 +158,50 @@ static constexpr const detail::RethrowCurrentException rethrow;
 /// A placeholder type for catch-all clauses in try-blocks
 /// (as `catch_([&](...) -> Task<>` is not allowed in C++).
 using Ellipsis = detail::Ellipsis;
+
+
+/// Chains multiple awaitables together, without having to allocate a coroutine
+/// frame.
+///
+/// `thenFn()` must be an invocable that either takes no arguments or takes
+/// one argument representing the result of the previous awaitable (by value
+/// or by lvalue- or rvalue-reference) and returns a new awaitable.
+/// Lifetime of the result of the previous awaitable is extended
+/// until the next awaitable completes, allowing the following:
+///
+///    class My {
+///        corral::Semaphore sem_;
+///      public:
+///        Awaitable<void> auto doSmth() {
+///           return sem_.lock() | corral::then([]{
+///               reallyDoSmth();
+///               return corral::noop();
+///           }
+///        }
+///
+/// -- which would be a more efficient equivalent of
+///        Task<> doSmth() {
+///            co_await sem_.lock();
+///            reallyDoSmth();
+///        }
+///
+///
+/// Multiple `then()` can be chained together, but using a coroutine
+/// might yield better readability in such cases. Also keep in mind that
+/// lifetime extension only spans until the next awaitable completes, so
+///
+///       return sem_.lock() | corral::then(doThis) | corral::then(doThat);
+///
+/// is roughly equivalent to
+///       { co_await sem_.lock(); co_await doThis(); }
+///       co_await doThat();
+///
+/// and is therefore different from
+///       return sem_.lock() | corral::then([]{
+///           return doThis | corral::then(doThat);
+///       });
+template <class ThenFn> auto then(ThenFn&& thenFn) {
+    return detail::SequenceBuilder<ThenFn>(std::forward<ThenFn>(thenFn));
+}
 
 } // namespace corral

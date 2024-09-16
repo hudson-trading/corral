@@ -378,6 +378,17 @@ in order to teach corral how to interact with it.
 * `Awaitable auto yieldToRun(std::invocable<> auto fn)`
   : Runs `fn()` with the current task suspended, returning its result.
 
+* `auto then(auto callable)`
+  : Allows chaining multiple awaitables into one in a monadic fashion,
+  without having to allocate a frame on the heap for a glue coroutine.
+  The resulting value of `then()` can be attached to an awaitable through `opreator|()`
+  (like `sem.lock() | then([](auto& lk) { return sleepFor(io, 3s); })`)
+  to form an awaitable which would first run the first child awaitable,
+  and upon its completion call `callable` (passing it the result of the awaitable)
+  to obtain the second awaitable, then start it and run it to completion.
+  If the callable accepts the result by reference, its lifetime will be extended
+  until the second awaitable completes.
+
 ## Synchronization primitives
 
 ### Event
