@@ -242,6 +242,12 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
 
     ~BasePromise() { CORRAL_TRACE("pr %p destroyed", this); }
 
+    /// Replaces the parent of an already started task.
+    void reparent(BaseTaskParent* parent, Handle caller) {
+        parent_ = parent;
+        linkTo(caller);
+    }
+
     /// Returns a handle which would schedule task startup if resume()d or
     /// returned from an await_suspend() elsewhere.
     /// `parent` is an entity which arranged the execution and which will get
@@ -251,10 +257,9 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
         if (checkImmediateResult(parent)) {
             return parent->continuation(this);
         }
-        parent_ = parent;
+        reparent(parent, caller);
         CORRAL_TRACE("pr %p started", this);
         onResume<&BasePromise::doResume>();
-        linkTo(caller);
         return proxyHandle();
     }
     // NOLINTNEXTLINE(clang-analyzer-core.uninitialized.UndefReturn)
@@ -264,7 +269,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     /// Instead, it will invoke the given callback and then resume its parent.
     /// This can be used to create promises that are not associated with a
     /// coroutine; see just() and noop(). Must be called before start().
-    template <class Derived, void (Derived::*onStart)()>
+    template <class Derived, void (Derived::* onStart)()>
     void makeStub(bool deleteThisOnDestroy) {
         CORRAL_ASSERT(state_ == State::Ready && parent_ == nullptr);
         state_ = State::Stub;
@@ -303,14 +308,10 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     /// is passed to awaitees.
     Handle proxyHandle() noexcept { return CoroutineFrame::toHandle(); }
 
-    bool hasAwaitee() const noexcept {
-        return state_ > State::Stub;
-    }
-    bool hasCoroutine() const noexcept {
-        return state_ != State::Stub;
-    }
+    bool hasAwaitee() const noexcept { return state_ > State::Stub; }
+    bool hasCoroutine() const noexcept { return state_ != State::Stub; }
 
-    template <void (BasePromise::*trampolineFn)()> void onResume() {
+    template <void (BasePromise::* trampolineFn)()> void onResume() {
         CoroutineFrame::resumeFn = +[](CoroutineFrame* frame) {
             auto promise = static_cast<BasePromise*>(frame);
             (promise->*trampolineFn)();
@@ -547,6 +548,10 @@ class Promise : public BasePromise, public ReturnValueMixin<T> {
         return BasePromise::start(parent, caller);
     }
 
+    void reparent(TaskParent<T>* parent, Handle caller) {
+        BasePromise::reparent(parent, caller);
+    }
+
     /// Allows using `co_yield` instead of `co_await` for nursery factories.
     /// This is purely a syntactic trick to allow the
     /// `CORRAL_WITH_NURSERY(n) { ... }` syntax to work, by making it expand
@@ -573,13 +578,13 @@ template <> class ReturnValueMixin<void> {
 /// The promise type for a task that is not backed by a coroutine and
 /// immediately returns a value of type T when invoked. Used by just()
 /// and noop().
-template <class T>
-class StubPromise : public Promise<T> {
+template <class T> class StubPromise : public Promise<T> {
   public:
     explicit StubPromise(T value) : value_(std::forward<T>(value)) {
         this->template makeStub<StubPromise, &StubPromise::onStart>(
                 /* deleteThisOnDestroy = */ true);
     }
+
   private:
     void onStart() { this->return_value(std::forward<T>(value_)); }
     T value_;
@@ -590,6 +595,7 @@ template <> class StubPromise<void> : public Promise<void> {
         static StubPromise inst;
         return inst;
     }
+
   private:
     StubPromise() {
         this->template makeStub<StubPromise, &StubPromise::onStart>(

@@ -114,10 +114,11 @@ tasks, and stashes the pointer for other methods to use:
 class MyLiveClass {
     corral::Nursery* nursery_ = nullptr;
   public:
-    corral::Task<void> run() {
+    corral::Task<void> run(corral::TaskStarted<> started = {}) {
         CORRAL_WITH_NURSERY(n) {
             auto guard = folly::makeGuard([this] { nursery_ = nullptr; });
             nursery_ = &n;
+            started();
             CORRAL_SUSPEND_FOREVER();
         };
     }
@@ -125,7 +126,7 @@ class MyLiveClass {
     // Now `nursery_` can be used to spawn tasks
     corral::Task<void> asyncThing();
     void beginThing() {
-        nursery_->start(asyncThing());
+        nursery_->start(&MyLiveClass::asyncThing, this);
     }
 };
 ```
@@ -134,7 +135,9 @@ This particular shape of `run()` can be simplified by using
 `corral::openNursery()`, which does exactly the above:
 
 ```cpp
-corral::Task<void> run() { return corral::openNursery(nursery_); }
+corral::Task<void> run(corral::TaskStarted<> started = {}) {
+    return corral::openNursery(nursery_, std::move(started));
+}
 ```
 
 (Note that this uses a trick we haven't seen yet: it's a synchronous
@@ -142,6 +145,28 @@ function which calls an async function and passes along the returned
 task handle. This is a more efficient way to wrap an async function
 than `co_return co_await corral::openNursery(nursery_);`, but both
 work.)
+
+Using such a class typically involves opening a nursery, and submitting
+the `run()` task to run there in the background:
+
+```cpp
+MyLiveClass obj;
+CORRAL_WITH_NURSERY(n) {
+    co_await n.start(&MyLiveClass::run, &obj);
+
+    // Now the object can be used in the remainder
+    // of the nursery block
+    obj.beginThing();
+
+    co_return corral::cancel; // shut down the background task
+                              // and any children thereof
+};
+```
+
+Note the use of the suspending version of `Nursery::start()` here;
+this ensures that `beginThing()` will not be called before `run()`
+starts executing, which is important because such a call would try to
+submit a task into a nullptr nursery.
 
 Live objects typically do not do anything meaningful merely because
 of having been constructed; one needs to `run()` them to make them
@@ -155,14 +180,17 @@ class MyParentLiveClass {
     MyChildLiveClass1 child1_;
     MyChildLiveClass2 child2_;
   public:
-    corral::Task<void> run() {
-        co_await corral::allOf(child1_.run(),
-                               child2_.run());
+    corral::Task<void> run(corral::TaskStarted<> started = {}) {
+        CORRAL_WITH_NURSERY(n) {
+            co_await corral::allOf(
+                n.start(&MyChildLiveClass1::run, &child1_),
+                n.start(&MyChildLiveClass2::run, &child2_));
+            started();
+            CORRAL_SUSPEND_FOREVER();
+        };
     }
 };
 ```
 
-Note that this parent class does not need a nursery for its own use,
-but still needs `run()` to establish a parent task to supervise the `run()`
-calls for each of its children. This results in an established hierarchy
-of tasks that resembles the hierarchy of the live objects in the program.
+This results in an established hierarchy of tasks that resembles
+the hierarchy of the live objects in the program.

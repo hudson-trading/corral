@@ -782,7 +782,7 @@ template <class T> struct Storage<T&&> {
 
 template <> struct Storage<void> {
     struct Type {};
-    // wrap nod defined
+    static Type wrap() { return {}; }
     static void unwrap(Type) {}
     static void unwrapCRef(Type) {}
 };
@@ -944,6 +944,62 @@ struct CallableSignature : CallableSignature<decltype(&Fn::operator())> {
     static constexpr const bool IsMemFunPtr = false;
 };
 
+
+/// A type which can hold a result of an asynchronous operation
+/// (a value of type T, or an exception, or confirmed cancellation).
+template <class T> class Result {
+  public:
+    void storeValue(ReturnType<T> t)
+        requires(!std::is_same_v<T, void>)
+    {
+        value_.template emplace<Value>(Storage<T>::wrap(std::forward<T>(t)));
+    }
+    void storeSuccess()
+        requires(std::is_same_v<T, void>)
+    {
+        value_.template emplace<Value>(Storage<T>::wrap());
+    }
+    void storeException(std::exception_ptr e) {
+        value_.template emplace<Exception>(std::move(e));
+    }
+    void storeException() { storeException(std::current_exception()); }
+    void markCancelled() { value_.template emplace<Cancelled>(); }
+
+    bool completed() const { return value_.index() != Incomplete; }
+
+    bool hasValue() const { return value_.index() == Value; }
+    bool hasException() const { return value_.index() == Exception; }
+    bool wasCancelled() const { return value_.index() == Cancelled; }
+
+    T value() && {
+        if constexpr (std::is_same_v<T, void>) {
+            if (hasException()) {
+                std::rethrow_exception(std::get<Exception>(std::move(value_)));
+            }
+        } else {
+            if (hasValue()) {
+                return Storage<T>::unwrap(std::get<Value>(std::move(value_)));
+            } else {
+                CORRAL_ASSERT(hasException() &&
+                              "co_await on a null or cancelled task");
+                std::rethrow_exception(std::get<Exception>(value_));
+            }
+        }
+    }
+
+  protected:
+    std::variant<std::monostate,
+                 typename Storage<T>::Type,
+                 std::exception_ptr,
+                 std::monostate>
+            value_;
+
+    // Indexes of types stored in variant
+    static constexpr const size_t Incomplete = 0;
+    static constexpr const size_t Value = 1;
+    static constexpr const size_t Exception = 2;
+    static constexpr const size_t Cancelled = 3;
+};
 
 } // namespace detail
 

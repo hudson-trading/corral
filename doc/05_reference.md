@@ -99,7 +99,13 @@ class Nursery {
     Nursery();
     Nursery(Nursery&&);
   public:
-    void start(auto callable, auto... args);
+    template<class Callable, class... Args>
+      requires(Awaitable<std::invoke_result_t<Callable, Args...>>)
+    void start(Callable, Args...); /*1*/
+
+    template<clas Ret = Unspecified, class Callable, class... Args>
+      requires(Awaitable<std::invoke_result_t<Callable, Args..., TaskStarted<Ret>>)
+    Awaitable<Ret> auto start(Callable, Args...); /*2*/
 
     void cancel();
 
@@ -123,7 +129,7 @@ A scope in which a dynamic number of child tasks can run.
   patiently for all tasks that were started in it to exit; `cancel` will
   cancel them instead (but still wait for them to exit in response).
 
-* `void Nursery::start(auto callable, auto... args)`
+* `void Nursery::start(Callable callable, Args... args) /*1*/`
   : Start `std::invoke(callable, args...)` (which must yield an awaitable)
   in the nursery. It will not actually start executing until the next
   `co_await` point is reached. The callable and its arguments will be moved
@@ -131,6 +137,21 @@ A scope in which a dynamic number of child tasks can run.
   `std::cref()` may be used to pass arguments by reference, if the caller
   takes responsibility for the referents' lifetimes; generally only objects
   defined outside the nursery block can safely be passed by reference.
+
+* `Awaitable auto Nursery::start(Callable callable, Args... args) /*2*/`
+  : Start `std::invoke(callable, args..., TaskStarted{...})` in the nursery,
+  and suspend the caller until the task invokes its `TaskStarted` argument.
+  Until its invocation the task is considered to be a child task
+  of the spawner: any exceptions raised by the child get reraised as
+  the result of `start()`, and cancellation of the spawner is proxied
+  to the child task. Upon the invocation of the `TaskStarted` object
+  the task is reparented to the nursery.
+  If the task accepts a `TaskStarted<T>` for a non-void type T, its
+  invocation requires a value of that type, which will become the result
+  of the `co_await start(...)` expression in the spawner. If this
+  result type can't be deduced automatically, which might happen when
+  calling a generic lambda for example, you can specify it as a template
+  argument to `start()`.
 
 * `void Nursery::cancel()`
   : Request cancellation of all tasks in the nursery, including those that

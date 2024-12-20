@@ -90,73 +90,19 @@ template <class T, class Self> class TaskAwaitableBase {
 };
 
 template <class T> class TaskResultStorage : public TaskParent<T> {
-  public:
-    T await_resume() && {
-        if (value_.index() == Value) {
-            return Storage<T>::unwrap(std::get<Value>(std::move(value_)));
-        } else {
-            CORRAL_ASSERT(value_.index() == Exception &&
-                          "co_await on a null or cancelled task");
-            std::rethrow_exception(std::get<Exception>(value_));
-        }
-    }
-
-    bool await_must_resume() const noexcept {
-        return value_.index() != Cancelled;
-    }
+  private:
+    void storeValue(T t) override { result_.storeValue(std::forward<T>(t)); }
 
   protected:
-    void onTaskDone() {
-        CORRAL_ASSERT(value_.index() != Incomplete &&
-                      "task exited without co_return'ing a result");
-    }
-
-  private:
-    void storeValue(T t) override {
-        value_.template emplace<Value>(Storage<T>::wrap(std::forward<T>(t)));
-    }
-    void storeException() override {
-        value_.template emplace<Exception>(std::current_exception());
-    }
-    void cancelled() override { value_.template emplace<Cancelled>(); }
-
-  private:
-    std::variant<std::monostate,
-                 typename Storage<T>::Type,
-                 std::exception_ptr,
-                 std::monostate>
-            value_;
-
-    // Indexes of types stored in variant
-    static constexpr const size_t Incomplete = 0;
-    static constexpr const size_t Value = 1;
-    static constexpr const size_t Exception = 2;
-    static constexpr const size_t Cancelled = 3;
+    Result<T> result_;
 };
 
 template <> class TaskResultStorage<void> : public TaskParent<void> {
-  public:
-    void await_resume() {
-        if (exception_) {
-            std::rethrow_exception(exception_);
-        }
-    }
-
-    bool await_must_resume() const noexcept { return completed_; }
+  private:
+    void storeSuccess() override { result_.storeSuccess(); }
 
   protected:
-    void onTaskDone() {}
-
-  private:
-    void storeSuccess() override { completed_ = true; }
-    void storeException() override {
-        completed_ = true;
-        exception_ = std::current_exception();
-    }
-
-  private:
-    std::exception_ptr exception_;
-    bool completed_ = false;
+    Result<void> result_;
 };
 
 /// An awaitable returned by `Task::operator co_await()`.
@@ -166,15 +112,23 @@ template <class T>
 class TaskAwaitable final : public TaskResultStorage<T>,
                             public TaskAwaitableBase<T, TaskAwaitable<T>> {
     using Base = TaskAwaitableBase<T, TaskAwaitable<T>>;
-    using Storage = TaskResultStorage<T>;
 
   public:
     TaskAwaitable() = default;
     explicit TaskAwaitable(Promise<T>* promise) : Base(promise) {}
 
+    T await_resume() && { return std::move(this->result_).value(); }
+    bool await_must_resume() const noexcept {
+        return !this->result_.wasCancelled();
+    }
+
   private:
+    void storeException() override { this->result_.storeException(); }
+    void cancelled() override { this->result_.markCancelled(); }
+
     Handle continuation(BasePromise*) noexcept override {
-        Storage::onTaskDone();
+        CORRAL_ASSERT(this->result_.completed() &&
+                      "task exited without co_return'ing a result");
         return Base::continuation();
     }
 };

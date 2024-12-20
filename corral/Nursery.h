@@ -45,10 +45,18 @@ struct CancelTag {
     explicit constexpr CancelTag(TagCtor) {}
 };
 using NurseryBodyRetval = std::variant<JoinTag, CancelTag>;
+
+class TaskStartedTag {
+    explicit constexpr TaskStartedTag(TagCtor) {}
+};
+
 }; // namespace detail
 
 static constexpr detail::JoinTag join{detail::TagCtor{}};
 static constexpr detail::CancelTag cancel{detail::TagCtor{}};
+
+template <class Ret = void> class TaskStarted;
+
 
 /// A nursery represents a scope for a set of tasks to live in.
 /// Execution cannot continue past the end of the nursery block until
@@ -94,6 +102,10 @@ static constexpr detail::CancelTag cancel{detail::TagCtor{}};
 /// reference/pointer to the nursery outside the lifetime of some
 /// specific task in the nursery.
 class Nursery : private detail::TaskParent<void> {
+    template <class Ret> class StartAwaitableBase;
+    template <class Ret, class Callable, class... Args> class StartAwaitable;
+    template <class Ret> friend class TaskStarted;
+
   public:
     struct Factory;
 
@@ -104,7 +116,7 @@ class Nursery : private detail::TaskParent<void> {
 
     ~Nursery() { CORRAL_ASSERT(tasks_.empty()); }
 
-    size_t taskCount() const noexcept { return taskCount_; }
+    unsigned taskCount() const noexcept { return taskCount_; }
 
     /// Starts a task in the nursery that runs
     /// `co_await std::invoke(c, args...)`.
@@ -113,8 +125,19 @@ class Nursery : private detail::TaskParent<void> {
     /// `std::ref()` or `std::cref()` if you want to actually pass by
     /// reference; be careful that the referent will live long enough.
     template <class Callable, class... Args>
-        requires(Awaitable<std::invoke_result_t<Callable, Args...>>)
+        requires(std::invocable<Callable, Args...> &&
+                 Awaitable<std::invoke_result_t<Callable, Args...>> &&
+                 !std::invocable<Callable, Args..., detail::TaskStartedTag>)
     void start(Callable c, Args... args);
+
+    /// Same as above, but allowing the task to notify the starter
+    /// of the successful initialization of the task.
+    template <class Ret = detail::Unspecified, class Callable, class... Args>
+        requires(std::invocable<Callable, Args..., detail::TaskStartedTag> &&
+                 Awaitable<std::invoke_result_t<Callable,
+                                                Args...,
+                                                detail::TaskStartedTag>>)
+    Awaitable auto start(Callable c, Args... args);
 
     /// Requests cancellation of all tasks.
     void cancel();
@@ -131,13 +154,18 @@ class Nursery : private detail::TaskParent<void> {
     Nursery() = default;
     Nursery(Nursery&&) = default;
 
-    void doStart(Task<void> t) { addTask(std::move(t), this).resume(); }
+    void doStart(detail::Promise<void>* p) { addPromise(p, this).resume(); }
 
     void rethrowException();
     static std::exception_ptr cancellationRequest();
 
     template <class Ret>
-    Handle addTask(Task<Ret> task, TaskParent<Ret>* parent);
+    Handle addPromise(detail::Promise<Ret>* p, TaskParent<Ret>* parent);
+
+    template <class Ret>
+    Handle addTask(Task<Ret> task, TaskParent<Ret>* parent) {
+        return addPromise(task.release(), parent);
+    }
 
     /// TaskParent implementation
     Handle continuation(detail::BasePromise* promise) noexcept override;
@@ -146,10 +174,21 @@ class Nursery : private detail::TaskParent<void> {
 
     void doCancel();
 
+    template <class Callable, class... Args>
+    detail::Promise<void>* makePromise(Callable c, Args... args);
+
+    void adopt(detail::BasePromise* promise);
+
+    template <class Ret>
+    static TaskStarted<Ret> makeTaskStarted(StartAwaitableBase<Ret>* parent) {
+        return TaskStarted<Ret>(parent);
+    }
+
   protected:
     Executor* executor_ = nullptr;
     detail::IntrusiveList<detail::BasePromise> tasks_;
-    size_t taskCount_ = 0;
+    unsigned taskCount_ = 0;
+    unsigned pendingTaskCount_ = 0;
     Handle parent_ = nullptr;
     std::exception_ptr exception_;
 };
@@ -279,9 +318,199 @@ class UnsafeNursery final : public Nursery, private Executor {
 };
 
 
+/// A callable spawned into a nursery can take a `TaskStarted` argument
+/// it can later call to indicate that it has started running.
+///
+/// `TaskStarted<T>` allows passing a result back to the caller once
+/// the task is initialized: it must be called with an argument of type
+/// T, and the corresponding `co_await nursery.start(...)` will evaluate
+/// to that T value. `TaskStarted<>` or `TaskStarted<void>` must be
+/// called with no arguments.
+template <class Ret> class TaskStarted {
+    using ResultType = Ret;
+
+    explicit TaskStarted(Nursery::StartAwaitableBase<Ret>* parent)
+      : parent_(parent) {}
+    friend Nursery;
+
+  public:
+    TaskStarted() = default;
+
+    TaskStarted(TaskStarted&& rhs)
+      : parent_(std::exchange(rhs.parent_, nullptr)) {}
+    TaskStarted& operator=(TaskStarted rhs) {
+        std::swap(parent_, rhs.parent_);
+        return *this;
+    }
+
+    void operator()(detail::ReturnType<Ret> ret)
+        requires(!std::is_same_v<Ret, void>);
+
+    void operator()()
+        requires(std::is_same_v<Ret, void>);
+
+    // Required for constraints on `Nursery::start()`.
+    explicit(false) TaskStarted(detail::TaskStartedTag); // not defined
+
+  protected:
+    Nursery::StartAwaitableBase<Ret>* parent_ = nullptr;
+};
+
+
 // ------------------------------------------------------------------------------------
 // Implementation
 
+//
+// Nursery::StartAwaitable
+//
+
+template <class Ret>
+class Nursery::StartAwaitableBase : protected TaskParent<void> {
+    friend TaskStarted<Ret>;
+
+  public:
+    explicit StartAwaitableBase(Nursery* nursery) : nursery_(nursery) {}
+
+    StartAwaitableBase(StartAwaitableBase&& rhs)
+      : nursery_(std::exchange(rhs.nursery_, nullptr)) {
+        CORRAL_ASSERT((handle_ == noopHandle()) && !promise_);
+    }
+    StartAwaitableBase& operator=(StartAwaitableBase&&) = delete;
+
+  private:
+    void storeSuccess() override {
+        CORRAL_ASSERT(!"Nursery task completed without signalling readiness");
+    }
+    void storeException() override { result_.storeException(); }
+    void cancelled() override { result_.markCancelled(); }
+
+    Handle continuation(detail::BasePromise* p) noexcept override {
+        if (Nursery* n = std::exchange(nursery_, nullptr)) {
+            // The task completed without calling TaskStarted<>::operator().
+            --n->pendingTaskCount_;
+        }
+        return std::exchange(handle_, noopHandle());
+    }
+
+    void handOff() {
+        detail::Promise<void>* p = promise_.release();
+        if (p) {
+            p->setExecutor(nursery_->executor());
+            p->reparent(nursery_, nursery_->parent_);
+            Nursery* n = std::exchange(nursery_, nullptr);
+            --n->pendingTaskCount_;
+            n->adopt(p);
+            std::exchange(handle_, noopHandle()).resume();
+        } else {
+            // TaskStarted<> was invoked before promise construction,
+            // so there's nothing to hand off to the nursery yet.
+            //
+            // StartAwaitable::await_suspend() will take care of submitting
+            // the promise properly when it becomes available.
+        }
+    }
+
+  protected:
+    Nursery* nursery_;
+    detail::Result<Ret> result_;
+    Handle handle_ = noopHandle();
+    detail::PromisePtr<void> promise_;
+    Executor* executor_ = nullptr;
+};
+
+template <class Ret, class Callable, class... Args>
+class Nursery::StartAwaitable : public StartAwaitableBase<Ret> {
+    friend Nursery;
+
+  public:
+    StartAwaitable(StartAwaitable&&) = default;
+    StartAwaitable& operator=(StartAwaitable&&) = delete;
+
+    bool await_early_cancel() noexcept { return false; }
+    bool await_ready() const noexcept { return false; }
+
+    void await_set_executor(Executor* ex) noexcept { this->executor_ = ex; }
+
+    Handle await_suspend(Handle h) {
+        CORRAL_TRACE("    ...Nursery::start() %p", this);
+        detail::PromisePtr<void> promise{std::apply(
+                [this](auto&&... args) {
+                    return this->nursery_->makePromise(std::move(callable_),
+                                                       std::move(args)...,
+                                                       makeTaskStarted(this));
+                },
+                std::move(args_))};
+
+        if (this->result_.completed()) {
+            // TaskStarted<> was invoked before promise construction,
+            // and handOff() was skipped; hand off the promise to the nursery
+            // ourselves.
+            std::exchange(this->nursery_, nullptr)->doStart(promise.release());
+            return h;
+        } else {
+            ++this->nursery_->pendingTaskCount_;
+            this->handle_ = h;
+            promise->setExecutor(this->executor_);
+            this->promise_ = std::move(promise);
+            return this->promise_->start(this, h);
+        }
+    }
+
+    Ret await_resume() && { return std::move(this->result_).value(); }
+    bool await_cancel(Handle) noexcept {
+        if (this->promise_) {
+            this->promise_->cancel();
+        }
+        return false;
+    }
+    auto await_must_resume() const noexcept {
+        return !this->result_.wasCancelled();
+    }
+
+    ~StartAwaitable() {
+        if (this->nursery_) {
+            std::apply(
+                    [this](auto&&... args) {
+                        this->nursery_->start(
+                                std::move(callable_), std::move(args)...,
+                                makeTaskStarted(
+                                        static_cast<StartAwaitableBase<Ret>*>(
+                                                nullptr)));
+                    },
+                    std::move(args_));
+        }
+    }
+
+  private:
+    StartAwaitable(Nursery* nursery, Callable&& callable, Args&&... args)
+      : StartAwaitableBase<Ret>(nursery),
+        callable_(std::forward<Callable>(callable)),
+        args_(std::forward<Args>(args)...) {}
+
+  private:
+    Callable callable_;
+    std::tuple<Args...> args_;
+};
+
+template <class Ret>
+void TaskStarted<Ret>::operator()(detail::ReturnType<Ret> ret)
+    requires(!std::is_same_v<Ret, void>)
+{
+    if (auto p = std::exchange(parent_, nullptr)) {
+        p->result_.storeValue(std::forward<Ret>(ret));
+        p->handOff();
+    }
+}
+
+template <class Ret>
+void TaskStarted<Ret>::operator()()
+    requires(std::is_same_v<Ret, void>)
+{
+    if (auto p = std::exchange(parent_, nullptr)) {
+        p->result_.storeSuccess();
+        p->handOff();
+    }
+}
 
 //
 // Nursery
@@ -303,12 +532,8 @@ inline void Nursery::rethrowException() {
     }
 }
 
-template <class Ret>
-inline Handle Nursery::addTask(Task<Ret> task, TaskParent<Ret>* parent) {
+inline void Nursery::adopt(detail::BasePromise* promise) {
     CORRAL_ASSERT(executor_ && "Nursery is closed to new arrivals");
-
-    detail::Promise<Ret>* promise = task.release();
-    CORRAL_ASSERT(promise);
     CORRAL_TRACE("pr %p handed to nursery %p (%zu tasks total)", promise, this,
                  taskCount_ + 1);
     if (exception_) {
@@ -316,13 +541,20 @@ inline Handle Nursery::addTask(Task<Ret> task, TaskParent<Ret>* parent) {
     }
     tasks_.push_back(*promise);
     ++taskCount_;
+}
+
+template <class Ret>
+inline Handle Nursery::addPromise(detail::Promise<Ret>* promise,
+                                  TaskParent<Ret>* parent) {
+    CORRAL_ASSERT(promise);
+    adopt(promise);
     promise->setExecutor(executor_);
     return promise->start(parent, parent_);
 }
 
 template <class Callable, class... Args>
-    requires(Awaitable<std::invoke_result_t<Callable, Args...>>)
-void Nursery::start(Callable callable, Args... args) {
+detail::Promise<void>* Nursery::makePromise(Callable callable, Args... args) {
+    Task<void> ret;
     if constexpr ((std::is_reference_v<Callable> &&
                    std::is_invocable_r_v<Task<>, Callable>) ||
                   std::is_convertible_v<Callable, Task<> (*)()>) {
@@ -331,7 +563,7 @@ void Nursery::start(Callable callable, Args... args) {
         // and no arguments were supplied.
         // In this case, we don't have to worry about the lifetime of its
         // captures, and can thus save an allocation here.
-        doStart(callable());
+        ret = callable();
     } else {
         // The lambda has captures, or we're working with a different
         // awaitable type, so wrap it into another async function.
@@ -344,7 +576,7 @@ void Nursery::start(Callable callable, Args... args) {
         // We need funciton call and `co_await` inside one statement,
         // so mimic `std::invoke()` logic here.
         if constexpr (std::is_member_pointer_v<Callable>) {
-            doStart([](Callable c, auto obj, auto... a) -> Task<> {
+            ret = [](Callable c, auto obj, auto... a) -> Task<> {
                 if constexpr (std::is_pointer_v<decltype(obj)>) {
                     co_await (obj->*c)(std::move(a)...);
                 } else if constexpr (detail::is_reference_wrapper_v<
@@ -353,12 +585,41 @@ void Nursery::start(Callable callable, Args... args) {
                 } else {
                     co_await (std::move(obj).*c)(std::move(a)...);
                 }
-            }(std::move(callable), std::move(args)...));
+            }(std::move(callable), std::move(args)...);
         } else {
-            doStart([](Callable c, Args... a) -> Task<> {
+            ret = [](Callable c, Args... a) -> Task<> {
                 co_await (std::move(c))(std::move(a)...);
-            }(std::move(callable), std::move(args)...));
+            }(std::move(callable), std::move(args)...);
         }
+    }
+
+    return ret.release();
+}
+
+template <class Callable, class... Args>
+    requires(std::invocable<Callable, Args...> &&
+             Awaitable<std::invoke_result_t<Callable, Args...>> &&
+             !std::invocable<Callable, Args..., detail::TaskStartedTag>)
+void Nursery::start(Callable callable, Args... args) {
+    doStart(makePromise(std::forward<Callable>(callable),
+                        std::forward<Args>(args)...));
+}
+
+template <class Ret /* = detail::Unspecified*/, class Callable, class... Args>
+    requires(std::invocable<Callable, Args..., detail::TaskStartedTag> &&
+             Awaitable<std::invoke_result_t<Callable,
+                                            Args...,
+                                            detail::TaskStartedTag>>)
+Awaitable auto Nursery::start(Callable callable, Args... args) {
+    if constexpr (std::is_same_v<Ret, detail::Unspecified>) {
+        using Sig = detail::CallableSignature<Callable>;
+        using TaskStartedArg = typename Sig::template Arg<Sig::Arity - 1>;
+        using ResultType = typename TaskStartedArg::ResultType;
+        return StartAwaitable<ResultType, Callable, Args...>(
+                this, std::move(callable), std::move(args)...);
+    } else {
+        return StartAwaitable<Ret, Callable, Args...>(this, std::move(callable),
+                                                      std::move(args)...);
     }
 }
 
@@ -424,7 +685,7 @@ inline Handle Nursery::continuation(detail::BasePromise* promise) noexcept {
     Handle ret = noopHandle();
     // NB: in an UnsafeNursery, parent_ is the task that called join(), or
     // nullptr if no one has yet
-    if (tasks_.empty() && parent_ != nullptr) {
+    if (tasks_.empty() && pendingTaskCount_ == 0 && parent_ != nullptr) {
         ret = std::exchange(parent_, nullptr);
         executor_ = nullptr; // nursery is now closed
     }
@@ -578,10 +839,11 @@ struct Nursery::Factory {
 /// the nursery is opened, and reset to nullptr when the
 /// `openNursery()` task receives a cancellation request (which may be
 /// slightly before the nursery closes). Does not return until cancelled.
-inline Task<void> openNursery(Nursery*& ptr) {
+inline Task<void> openNursery(Nursery*& ptr, TaskStarted<> started = {}) {
     CORRAL_WITH_NURSERY(nursery) {
         ptr = &nursery;
         detail::ScopeGuard guard([&] { ptr = nullptr; });
+        started();
         co_await SuspendForever{};
         co_return join; // make MSVC happy
     };

@@ -253,7 +253,7 @@ the reference into `std::ref` (or `std::cref` for a constant reference):
 corral::Task<void> foo(int&);
 corral::Task<void> bar() {
     int x = 0;
-    CORRAL_WITH_NURSERY() {
+    CORRAL_WITH_NURSERY(n) {
         for (int i = 0; i != 10; ++i) {
             n.start(foo, std::ref(x));
         }
@@ -264,6 +264,67 @@ corral::Task<void> bar() {
 
 Generally only things defined _outside_ the nursery block can safely
 be wrapped into `std::ref()` when passing to `Nursery::start()`.
+
+Sometimes it may be necessary to submit a task into a nursery
+and suspend until the task finishes initializing. While it is
+possible to express this using existing synchronization primitives:
+
+```cpp
+corral::Event started;
+CORRAL_WITH_NURSERY(n) {
+    n.start([&]() -> corral::Task<> {
+        // ...initialize...
+        started.trigger();
+        // ...work...
+    });
+    co_await started;
+    // ...communicate with the task...
+};
+```
+— the pattern is common enough that there is also a built-in option:
+the callable passed to `Nursery::start()` may take a trailing
+`corral::TaskStarted` parameter and invoke it after initialization.
+When `Nursery::start()` receives such a callable, it returns an
+awaitable such that `co_await nursery.start(...)` will both start
+the task and wait for its initialization to complete. Using this
+feature, the above example looks like:
+
+```cpp
+CORRAL_WITH_NURSERY(n) {
+    co_await n.start([&](corral::TaskStarted<> started) -> corral::Task<> {
+        // ...initialize...
+        started();
+        // ...work...
+    });
+    // ...communicate with the task...
+};
+```
+
+The awaitable will also submit the task if it is destroyed before it is
+awaited, so `n.start()` without `co_await` will work as it did without
+the `TaskStarted` parameter. If you want to support using the same function
+with both `n.start()` and with direct `co_await`, you can let it
+accept a final argument of `corral::TaskStarted<> started = {}`, with
+a default argument value. The default-constructed `TaskStarted` object
+performs no operation when it is called.
+
+When using this feature, the `TaskStarted` object is constructed internally
+by the nursery, and will be passed to the function after all user-specified arguments.
+This convention makes it difficult to combine use of `TaskStarted`
+with default arguments.
+
+A task submitted into a nursery may also communicate a value back
+to its spawner, which becomes the result of the `co_await n.start()` expression:
+
+```
+CORRAL_WITH_NURSERY(n) {
+    int v = co_await n.start([&](corral::TaskStarted<int> started) -> corral::Task {
+        started(42);
+        // ...further work...
+    });
+    assert(v == 42);
+};
+```
 
 ## The task tree
 

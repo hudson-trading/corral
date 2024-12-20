@@ -1127,6 +1127,194 @@ CORRAL_TEST_CASE("nursery-exception") {
     CATCH_CHECK(t.now() == 0ms);
 }
 
+CORRAL_TEST_CASE("nursery-task-started") {
+    CATCH_SECTION("start-await") {
+        CORRAL_WITH_NURSERY(n) {
+            co_await n.start(
+                    [&](milliseconds delay, TaskStarted<> started) -> Task<> {
+                        co_await t.sleep(delay);
+                        started();
+                        co_await t.sleep(5ms);
+                    },
+                    2ms);
+            CATCH_CHECK(t.now() == 2ms);
+            co_return join;
+        };
+        CATCH_CHECK(t.now() == 7ms);
+    }
+
+    CATCH_SECTION("start-no-await") {
+        CORRAL_WITH_NURSERY(n) {
+            n.start(
+                    [&](milliseconds delay, TaskStarted<> started) -> Task<> {
+                        co_await t.sleep(delay);
+                        started();
+                    },
+                    2ms);
+            co_return join;
+        };
+        CATCH_CHECK(t.now() == 2ms);
+    }
+
+    CATCH_SECTION("optional-arg-await") {
+        CORRAL_WITH_NURSERY(n) {
+            co_await n.start(
+                    [&](milliseconds delay,
+                        TaskStarted<> started = {}) -> Task<> {
+                        co_await t.sleep(delay);
+                        started();
+                        co_await t.sleep(5ms);
+                    },
+                    2ms);
+            CATCH_CHECK(t.now() == 2ms);
+            co_return join;
+        };
+        CATCH_CHECK(t.now() == 7ms);
+    }
+
+    CATCH_SECTION("optional-arg-no-await") {
+        CORRAL_WITH_NURSERY(n) {
+            n.start(
+                    [&](milliseconds delay,
+                        TaskStarted<> started = {}) -> Task<> {
+                        co_await t.sleep(delay);
+                        started();
+                    },
+                    2ms);
+            co_return join;
+        };
+        CATCH_CHECK(t.now() == 2ms);
+    }
+
+    CATCH_SECTION("combiners") {
+        auto task = [&](milliseconds delay, TaskStarted<> started) -> Task<> {
+            co_await t.sleep(delay);
+            started();
+            co_await t.sleep(delay);
+        };
+        CORRAL_WITH_NURSERY(n) {
+            co_await allOf(n.start(task, 2ms), n.start(task, 3ms));
+            CATCH_CHECK(t.now() == 3ms);
+            co_return join;
+        };
+        CATCH_CHECK(t.now() == 6ms);
+    }
+
+    CATCH_SECTION("retval") {
+        CORRAL_WITH_NURSERY(n) {
+            int ret = co_await n.start([](TaskStarted<int> started) -> Task<> {
+                co_await yield; // make this a coroutine
+                started(42);
+            });
+            CATCH_CHECK(ret == 42);
+            co_return join;
+        };
+    }
+
+    CATCH_SECTION("template-retval") {
+        CORRAL_WITH_NURSERY(n) {
+            int ret = co_await n.start<int>(
+                    [](auto arg, TaskStarted<int> started) -> Task<> {
+                        co_await yield; // make this a coroutine
+                        started(arg);
+                    },
+                    42);
+            CATCH_CHECK(ret == 42);
+            co_return join;
+        };
+    }
+
+    CATCH_SECTION("exception") {
+        CORRAL_WITH_NURSERY(n) {
+            try {
+                co_await n.start([](TaskStarted<> started) -> Task<> {
+                    co_await yield; // make this a coroutine
+                    throw std::runtime_error("boo!");
+                });
+                CATCH_CHECK(!"should never reach here");
+            } catch (const std::runtime_error& e) {
+                CATCH_CHECK(e.what() == std::string_view("boo!"));
+            }
+            co_return join;
+        };
+    }
+
+    CATCH_SECTION("cancellation") {
+        CORRAL_WITH_NURSERY(n) {
+            auto [done, timedOut] = co_await anyOf(
+                    n.start([&](TaskStarted<> started) -> Task<> {
+                        co_await t.sleep(5ms);
+                        CATCH_CHECK(!"should never reach here");
+                    }),
+                    t.sleep(2ms));
+            CATCH_CHECK(!done);
+            CATCH_CHECK(t.now() == 2ms);
+            co_return join;
+        };
+    }
+
+    CATCH_SECTION("rejected-cancellation") {
+        CORRAL_WITH_NURSERY(n) {
+            auto [done, timedOut] = co_await anyOf(
+                    n.start([&](TaskStarted<> started) -> Task<> {
+                        co_await corral::noncancellable(t.sleep(5ms));
+                        started();
+                    }),
+                    t.sleep(2ms));
+            CATCH_CHECK(done);
+            CATCH_CHECK(t.now() == 5ms);
+            co_return join;
+        };
+    }
+
+    CATCH_SECTION("open-nursery") {
+        Nursery* inner = nullptr;
+        CORRAL_WITH_NURSERY(outer) {
+            co_await outer.start(openNursery, std::ref(inner));
+            inner->start([&]() -> Task<> { co_return; });
+            co_return cancel;
+        };
+    }
+
+    CATCH_SECTION("start-cancel_nursery-confirm") {
+        Nursery* inner = nullptr;
+        Event cancelInner;
+        CORRAL_WITH_NURSERY(outer) {
+            co_await outer.start([&](TaskStarted<> started) -> Task<> {
+                co_await anyOf(openNursery(std::ref(inner), std::move(started)),
+                               cancelInner);
+            });
+
+            CATCH_REQUIRE(inner);
+
+            outer.start([&]() -> Task<> {
+                co_await inner->start([&](TaskStarted<> started) -> Task<> {
+                    co_await t.sleep(5ms);
+                    started();
+                    co_await t.sleep(1ms);
+                });
+            });
+
+            co_await t.sleep(1ms);
+            cancelInner.trigger();
+            co_await t.sleep(1ms);
+            CATCH_CHECK(!inner);
+
+            co_return join;
+        };
+    }
+
+    CATCH_SECTION("immediately-ready") {
+        CORRAL_WITH_NURSERY(n) {
+            co_await n.start([](TaskStarted<> started) -> Task<> {
+                started();
+                return noop();
+            });
+            co_return join;
+        };
+    }
+}
+
 CORRAL_TEST_CASE("shared") {
     auto shared = Shared([&]() -> Task<int> {
         co_await t.sleep(5ms);
