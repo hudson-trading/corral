@@ -44,7 +44,7 @@ template <class T = void> class [[nodiscard]] Task : public detail::TaskTag {
     Task() = default;
     explicit Task(detail::Promise<T>& promise) : promise_(&promise) {}
 
-    explicit operator bool() const { return promise_.get() != nullptr; }
+    bool valid() const { return promise_.get() != nullptr; }
 
     /// co_await'ing on a task starts it and suspends the caller until its
     /// completion.

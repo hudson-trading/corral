@@ -425,7 +425,7 @@ template <class Callable> class AwaitableLambda {
 
   private:
     AwaitableT& awaitable() {
-        if (!task_) {
+        if (!task_.valid()) {
             task_ = callable_();
             awaitable_ = task_.operator co_await();
         }
