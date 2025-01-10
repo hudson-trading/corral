@@ -170,7 +170,8 @@ A scope in which a dynamic number of child tasks can run.
 * `Task<void> openNursery(Nursery*& ptr)`
   : Opens a new nursery, and sets `ptr` to point to it.
   The nursery remains open until the task is cancelled, and `ptr` will be
-  reset to null at that point.
+  reset to null after all tasks in the nursery complete or cancel and
+  the nursery closes.
 
 ### UnsafeNursery
 

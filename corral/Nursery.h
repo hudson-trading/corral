@@ -105,6 +105,7 @@ class Nursery : private detail::TaskParent<void> {
     template <class Ret> class StartAwaitableBase;
     template <class Ret, class Callable, class... Args> class StartAwaitable;
     template <class Ret> friend class TaskStarted;
+    friend Task<void> openNursery(Nursery*&, TaskStarted<>);
 
   public:
     struct Factory;
@@ -149,6 +150,7 @@ class Nursery : private detail::TaskParent<void> {
     template <class Callable> class Scope;
 
   protected:
+    template <class NurseryT> class Awaitable;
     template <class Derived> class ParentAwaitable;
 
     Nursery() = default;
@@ -183,6 +185,9 @@ class Nursery : private detail::TaskParent<void> {
     static TaskStarted<Ret> makeTaskStarted(StartAwaitableBase<Ret>* parent) {
         return TaskStarted<Ret>(parent);
     }
+
+    void introspect(detail::TaskTreeCollector& c,
+                    const char* title) const noexcept;
 
   protected:
     Executor* executor_ = nullptr;
@@ -223,8 +228,6 @@ class Nursery : private detail::TaskParent<void> {
 /// a deep understanding of the nature of any tasks spawned directly or
 /// indirectly into this nursery.
 class UnsafeNursery final : public Nursery, private Executor {
-    class Awaitable;
-
   public:
     template <class EventLoopT>
     explicit UnsafeNursery(EventLoopT&& eventLoop)
@@ -307,13 +310,7 @@ class UnsafeNursery final : public Nursery, private Executor {
 
     // Allow the nursery itself to be an introspection root for its executor
     void await_introspect(detail::TaskTreeCollector& c) const noexcept {
-        static_assert(std::is_base_of_v<
-                      detail::IntrusiveListItem<detail::BasePromise>,
-                      detail::BasePromise>);
-        c.node("UnsafeNursery");
-        for (auto& t : tasks_) {
-            c.child(t);
-        }
+        introspect(c, "UnsafeNursery");
     }
 };
 
@@ -355,6 +352,22 @@ template <class Ret> class TaskStarted {
   protected:
     Nursery::StartAwaitableBase<Ret>* parent_ = nullptr;
 };
+
+
+/// Usable for implementing live objects, if the only things needed
+/// from their `run()` methods is establishing a nursery:
+///
+///     class MyLiveObject {
+///         corral::Nursery* nursery_;
+///       public:
+///         auto run() { return corral::openNursery(nursery_); }
+///         void startStuff() { nursery_->start(doStuff()); }
+///     };
+///
+/// The nursery pointer passed as an argument will be initialized once
+/// the nursery is opened, and reset to nullptr when the nursery
+/// is closed. Does not return until cancelled.
+Task<void> openNursery(Nursery*& ptr, TaskStarted<> started = {});
 
 
 // ------------------------------------------------------------------------------------
@@ -707,6 +720,15 @@ inline Handle Nursery::continuation(detail::BasePromise* promise) noexcept {
     return std::noop_coroutine();
 }
 
+
+inline void Nursery::introspect(detail::TaskTreeCollector& c,
+                                const char* title) const noexcept {
+    c.node(title);
+    for (auto& t : tasks_) {
+        c.child(t);
+    }
+}
+
 //
 // Logic for binding the nursery parent to the nursery
 //
@@ -733,14 +755,21 @@ template <class Derived> class Nursery::ParentAwaitable {
     }
 };
 
-class UnsafeNursery::Awaitable : public Nursery::ParentAwaitable<Awaitable> {
-    friend ParentAwaitable;
-    friend UnsafeNursery;
-    UnsafeNursery& nursery_;
+template <class NurseryT>
+class Nursery::Awaitable
+  : public Nursery::ParentAwaitable<Awaitable<NurseryT>> {
+    friend ParentAwaitable<Awaitable<NurseryT>>;
+    friend NurseryT;
 
-    explicit Awaitable(UnsafeNursery& nursery) : nursery_(nursery) {}
+    NurseryT& nursery_;
+
+    explicit Awaitable(NurseryT& nursery) : nursery_(nursery) {}
 
   public:
+    ~Awaitable()
+        requires(std::derived_from<NurseryT, Nursery>)
+    = default;
+
     bool await_ready() const noexcept { return nursery_.executor_ == nullptr; }
     bool await_suspend(Handle h) {
         CORRAL_ASSERT(!nursery_.parent_);
@@ -773,13 +802,6 @@ class Nursery::Scope : public detail::NurseryScopeBase,
       public:
         Impl() = default;
         Impl(Impl&&) noexcept = default;
-
-        void introspect(detail::TaskTreeCollector& c) const noexcept {
-            c.node("Nursery");
-            for (auto& t : tasks_) {
-                c.child(t);
-            }
-        }
     };
 
   public:
@@ -798,7 +820,7 @@ class Nursery::Scope : public detail::NurseryScopeBase,
     }
 
     void await_introspect(detail::TaskTreeCollector& c) const noexcept {
-        nursery_.introspect(c);
+        nursery_.introspect(c, "Nursery");
     }
 
   private:
@@ -825,28 +847,43 @@ struct Nursery::Factory {
 };
 
 
-/// Usable for implementing live objects, if the only things needed
-/// from their `run()` methods is establishing a nursery:
-///
-///     class MyLiveObject {
-///         corral::Nursery* nursery_;
-///       public:
-///         auto run() { return corral::openNursery(nursery_); }
-///         void startStuff() { nursery_->start(doStuff()); }
-///     };
-///
-/// The nursery pointer passed as an argument will be initialized once
-/// the nursery is opened, and reset to nullptr when the
-/// `openNursery()` task receives a cancellation request (which may be
-/// slightly before the nursery closes). Does not return until cancelled.
-inline Task<void> openNursery(Nursery*& ptr, TaskStarted<> started = {}) {
-    CORRAL_WITH_NURSERY(nursery) {
-        ptr = &nursery;
-        detail::ScopeGuard guard([&] { ptr = nullptr; });
-        started();
-        co_await SuspendForever{};
-        co_return join; // make MSVC happy
-    };
+namespace detail {
+class BackreferencedNursery final : public Nursery {
+    friend Task<void> corral::openNursery(Nursery*&, TaskStarted<>);
+    friend Nursery::Awaitable<BackreferencedNursery>;
+
+  private /*methods*/:
+    BackreferencedNursery(Executor* executor, Nursery*& backref)
+      : backref_(backref) {
+        backref_ = this;
+        executor_ = executor;
+    }
+
+    Handle continuation(detail::BasePromise* p) noexcept override {
+        if (taskCount_ == 1 && pendingTaskCount_ == 0) {
+            backref_ = nullptr;
+        }
+        return Nursery::continuation(p);
+    }
+
+    corral::Awaitable<void> auto join() { return Awaitable(*this); }
+
+    void await_introspect(detail::TaskTreeCollector& c) const noexcept {
+        introspect(c, "Nursery");
+    }
+
+  private /*fields*/:
+    Nursery*& backref_;
+};
+} // namespace detail
+
+
+inline Task<void> openNursery(Nursery*& ptr, TaskStarted<> started /*= {}*/) {
+    Executor* ex = co_await getExecutor();
+    detail::BackreferencedNursery nursery(ex, ptr);
+    nursery.start([]() -> Task<> { co_await SuspendForever{}; });
+    started();
+    co_await nursery.join();
 }
 
 } // namespace corral

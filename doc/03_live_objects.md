@@ -146,6 +146,18 @@ task handle. This is a more efficient way to wrap an async function
 than `co_return co_await corral::openNursery(nursery_);`, but both
 work.)
 
+`openNursery()` has another advantage over its makeshift equivalent
+shown above: with `openNursery()`, the nursery pointer will be cleared
+when the nursery is actually closed (i.e., when its last task exits),
+not merely when the cancellation request is received by the `openNursery()`
+task. That means any tasks still running in the nursery during cleanup
+may continue to use the nursery pointer to start additional tasks
+to perform whatever operations are needed in order to cleanly shut down.
+Such tasks will begin execution in an already-cancelled state (so they
+probably want to make careful use of `corral::noncancellable()`
+or `corral::untilCancelledAnd()`), but in many cases that's
+preferable to not being able to start them at all.
+
 Using such a class typically involves opening a nursery, and submitting
 the `run()` task to run there in the background:
 

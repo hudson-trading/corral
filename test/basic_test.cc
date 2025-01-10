@@ -1298,6 +1298,8 @@ CORRAL_TEST_CASE("nursery-task-started") {
             co_await t.sleep(1ms);
             cancelInner.trigger();
             co_await t.sleep(1ms);
+            CATCH_CHECK(inner);
+            co_await t.sleep(5ms);
             CATCH_CHECK(!inner);
 
             co_return join;
@@ -1313,6 +1315,18 @@ CORRAL_TEST_CASE("nursery-task-started") {
             co_return join;
         };
     }
+}
+
+CORRAL_TEST_CASE("open-nursery-cancel") {
+    Nursery* n = nullptr;
+    CORRAL_WITH_NURSERY(n2) {
+        co_await n2.start(openNursery, std::ref(n));
+        n->start([&]() -> Task<> {
+            co_await t.sleep(1ms, noncancellable);
+            n->start([&]() -> Task<> { co_return; });
+        });
+        co_return cancel;
+    };
 }
 
 CORRAL_TEST_CASE("shared") {
