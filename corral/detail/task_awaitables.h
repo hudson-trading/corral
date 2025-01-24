@@ -34,10 +34,11 @@
 
 namespace corral::detail {
 
-template <class T, class Self> class TaskAwaitableBase {
+template <class T, class Self> class TaskAwaitableBase : private Noncopyable {
   public:
-    TaskAwaitableBase() : promise_(nullptr) {}
-    explicit TaskAwaitableBase(Promise<T>* promise) : promise_(promise) {}
+    TaskAwaitableBase() noexcept : promise_(nullptr) {}
+    explicit TaskAwaitableBase(Promise<T>* promise) noexcept
+      : promise_(promise) {}
 
     void await_set_executor(Executor* ex) noexcept {
         promise_->setExecutor(ex);

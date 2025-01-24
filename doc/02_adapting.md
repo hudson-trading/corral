@@ -467,6 +467,86 @@ co_await corral::anyOf(
     QtSignalAwaitable(cancelButton, &QPushButton::clicked));
 ```
 
+
+### Movability of awaitables
+
+Awaitables need to be movable in order to be passed to
+`anyOf()` or `allOf()` combiners. However, most awaitables
+cannot actually be moved once they're awaited, because
+they need to be called back at a well-defined address once
+the operation completes (both examples above demonstrate
+this need: they capture `this` in lambdas they pass further down).
+
+This contradiction can be resolved by splitting the awaitable
+into two objects:
+
+* an _immediate awaitable_ or _operation state_ object, which defines the
+  ``await_*()`` methods; it logically represents the state of an in-progress
+  operation, and can be immovable;
+
+* a higher-level _operation description_ object that returns the immediate
+  awaitable from its `operator co_await()`; it logically describes
+  which operation is to be done, but doesn't need to be involved
+  in the process of performing it, and can therefore be movable.
+
+Each Corral combiner or adaptor that wraps awaitables (`anyOf()`,
+`noncancellable()`, etc) both expects and conforms to this model:
+
+* It requires its arguments to be movable, which follows naturally
+  if the arguments are operation descriptions (implementing `operator
+  co_await()` rather than the `await_*()` methods)
+
+* It returns a movable operation description object that, when awaited,
+  will construct an operation state that comprises operation states
+  constructed from its arguments; due to C++17 mandatory copy elision,
+  this can all be done in-place, allowing all the operation states
+  to be immovable.
+
+Adapting `AsyncRead` from the above example would therefore look
+like this:
+
+```cpp
+class AsyncRead {
+    // In addition to the above:
+    AsyncRead(AsyncRead&&) = delete;
+};
+
+class AsyncReadBuilder {
+    int fd_;
+    void* buf_;
+    size_t len_;
+
+  public:
+    AsyncReadBuilder(int fd, void* buf, size_t len):
+        fd_(fd), buf_(buf), len_(len) {}
+
+    AsyncRead operator co_await() && {
+        return AsyncRead(fd_, buf_, len_);
+    }
+};
+
+
+corral::Awaitable<ssize_t> auto asyncRead(int fd, void* buf, size_t len) {
+    return AsyncReadBuilder(fd, buf, len);
+}
+```
+
+While this approach allows passing `asyncRead()` into `anyOf()`
+while keeping the `AsyncRead` class immovable, it requires a decent
+amount of typing. In the common case where the description class
+merely saves arguments for the constructor of the operation state
+and forwards them in its `operator co_await()`, you can use
+the utility function `corral::makeAwaitable()` to automatically
+generate the operation description type:
+
+```cpp
+class AsyncRead { /* same as above */ };
+
+corral::Awaitable<ssize_t> auto asyncRead(int fd, void* buf, size_t len) {
+    return corral::makeAwaitable<AsyncRead>(fd, buf, len);
+}
+```
+
 ## Adapting an event loop
 
 Since async functions only run when awaited, you need a call to

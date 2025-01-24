@@ -182,8 +182,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
             // its resume point, and forward cancellation request to the
             // awaitee
             onResume<&BasePromise::doResumeAfterCancel>();
-            Handle h = checker_.aboutToCancel(proxyHandle());
-            if (checker_.cancelReturned(awaitee_.cancel(h))) {
+            if (awaitee_.cancel(proxyHandle())) {
                 propagateCancel();
             }
         }
@@ -346,8 +345,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     /// Called when this task's awaitee completes after its cancellation was
     /// requested but didn't succeed immediately.
     void doResumeAfterCancel() {
-        if (hasAwaitee() &&
-            checker_.mustResumeReturned(awaitee_.mustResume())) {
+        if (hasAwaitee() && awaitee_.mustResume()) {
             // This awaitee completed normally, so don't propagate the
             // cancellation. Attempt it again on the next co_await.
             cancelState_ = CancelState::Requested;
@@ -379,30 +377,25 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
         awaitee_ = BasePromise::Awaitee(awaitee); // this resets cancelState_
 
         if (cancelRequested) {
-            if (checker_.earlyCancelReturned(awaitEarlyCancel(awaitee))) {
+            if (awaitEarlyCancel(awaitee)) {
                 CORRAL_TRACE("    ... early-cancelled awaitee (skipped)");
                 propagateCancel();
                 return std::noop_coroutine();
             }
             onResume<&BasePromise::doResumeAfterCancel>();
-            if (checker_.readyReturned(awaitee.await_ready())) {
+            if (awaitee.await_ready()) {
                 CORRAL_TRACE("    ... already-ready awaitee");
                 return proxyHandle();
             }
         } else {
             onResume<&BasePromise::doResume>();
         }
-        checker_.aboutToSetExecutor();
-        if constexpr (NeedsExecutor<Awaitee>) {
-            awaitee.await_set_executor(executor_);
-        }
+        awaitee.await_set_executor(executor_);
 
         try {
-            return detail::awaitSuspend(awaitee,
-                                        checker_.aboutToSuspend(proxyHandle()));
+            return detail::awaitSuspend(awaitee, proxyHandle());
         } catch (...) {
             CORRAL_TRACE("pr %p: exception thrown from await_suspend", this);
-            checker_.suspendThrew();
             state_ = State::Running;
             if (cancelRequested) {
                 cancelState_ = CancelState::Requested;
@@ -453,7 +446,6 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
             CancelState cancelState_;
         };
     };
-    [[no_unique_address]] AwaitableStateChecker checker_;
 
     //
     // Hooks
@@ -469,34 +461,37 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     };
 
     /// A proxy which allows Promise to have control over its own suspension.
-    template <class Awaitee> class AwaitProxy {
+    template <class T> class AwaitProxy {
+        // Use decltype instead of AwaitableType in order to reference
+        // (rather than moving) an incoming Awaitee&& that is
+        // ImmediateAwaitable; even if it's a temporary, it will live for
+        // the entire co_await expression including suspension.
+        using AwaitableType = decltype(getAwaitable(std::declval<T>()));
+
       public:
-        AwaitProxy(BasePromise* promise, Awaitee&& wrapped) noexcept
-          : awaitee_(std::forward<Awaitee>(wrapped)), promise_(promise) {}
+        AwaitProxy(BasePromise* promise, T&& wrapped)
+          : awaitee_(std::forward<T>(wrapped)), promise_(promise) {}
 
         bool await_ready() const noexcept {
-            promise_->checker_.reset();
             // NOLINTNEXTLINE(clang-analyzer-core.UndefinedBinaryOperatorResult)
             if (promise_->cancelState_ == CancelState::Requested) {
                 // If the awaiting task has pending cancellation, we want
                 // to execute the more involved logic in hookAwaitSuspend().
                 return false;
             } else {
-                return promise_->checker_.readyReturned(awaitee_.await_ready());
+                return awaitee_.await_ready();
             }
         }
+
         CORRAL_NOINLINE auto await_suspend(Handle) {
             promise_->pc = reinterpret_cast<uintptr_t>(CORRAL_RETURN_ADDRESS());
             return promise_->hookAwaitSuspend(awaitee_);
         }
 
-        decltype(auto) await_resume() {
-            promise_->checker_.aboutToResume();
-            return std::forward<Awaitee>(awaitee_).await_resume();
-        }
+        decltype(auto) await_resume() { return awaitee_.await_resume(); }
 
       private:
-        [[no_unique_address]] Awaitee awaitee_;
+        [[no_unique_address]] AwaitableAdapter<T, AwaitableType> awaitee_;
         BasePromise* promise_;
     };
 
@@ -513,14 +508,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
                 !std::is_same_v<std::decay_t<Awaitee>, FinalSuspendProxy>);
         // Note: intentionally not constraining Awaitee here to get a nicer
         // compilation error (constraint will be checked in getAwaitable()).
-        // Use decltype instead of AwaitableType in order to reference
-        // (rather than moving) an incoming Awaitee&& that is
-        // ImmediateAwaitable; even if it's a temporary, it will live for
-        // the entire co_await expression including suspension.
-
-        using Ret = decltype(getAwaitable(std::forward<Awaitee>(awaitee)));
-        return AwaitProxy<Ret>(this,
-                               getAwaitable(std::forward<Awaitee>(awaitee)));
+        return AwaitProxy<Awaitee>(this, std::forward<Awaitee>(awaitee));
     }
 
     friend RethrowCurrentException;

@@ -48,7 +48,7 @@ template <class T = void> class [[nodiscard]] Task : public detail::TaskTag {
 
     /// co_await'ing on a task starts it and suspends the caller until its
     /// completion.
-    auto operator co_await() {
+    auto operator co_await() noexcept {
         return detail::TaskAwaitable<T>(promise_.get());
     }
 
@@ -76,7 +76,7 @@ template <class T> class ReadyAwaitable {
     bool await_early_cancel() const noexcept { return false; }
     bool await_ready() const noexcept { return true; }
     bool await_suspend(Handle) { return false; }
-    bool await_cancel(Handle) const { return false; }
+    bool await_cancel(Handle) noexcept { return false; }
     bool await_must_resume() const noexcept { return true; }
     T await_resume() && { return std::forward<T>(value_); }
 
@@ -93,7 +93,7 @@ template <> class ReadyAwaitable<void> {
     bool await_early_cancel() const noexcept { return false; }
     bool await_ready() const noexcept { return true; }
     bool await_suspend(Handle) { return false; }
-    bool await_cancel(Handle) const { return false; }
+    bool await_cancel(Handle) noexcept { return false; }
     bool await_must_resume() const noexcept { return true; }
     void await_resume() && {}
 

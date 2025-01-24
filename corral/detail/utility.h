@@ -40,6 +40,12 @@ class Executor;
 
 namespace detail {
 
+struct Noncopyable {
+    Noncopyable() = default;
+    Noncopyable(const Noncopyable&) = delete;
+    Noncopyable& operator=(const Noncopyable&) = delete;
+};
+
 class BasePromise;
 
 /// Base class to inherit Task<T> from, to easily figure out if something
@@ -372,6 +378,13 @@ template <class Aw> auto awaitMustResume(const Aw& awaitable) noexcept {
 }
 
 template <class Aw>
+void awaitSetExecutor(Aw& awaitable, Executor* ex) noexcept {
+    if constexpr (NeedsExecutor<Aw>) {
+        awaitable.await_set_executor(ex);
+    }
+}
+
+template <class Aw>
 void awaitIntrospect(const Aw& awaitable, TaskTreeCollector& c) noexcept {
     if constexpr (Introspectable<Aw>) {
         awaitable.await_introspect(c);
@@ -392,6 +405,14 @@ template <class Callable> class AwaitableLambda {
   public:
     explicit AwaitableLambda(Callable&& c)
       : callable_(std::forward<Callable>(c)) {}
+
+    AwaitableLambda(AwaitableLambda&&) = delete;
+
+    ~AwaitableLambda() {
+        if (task_.valid()) {
+            awaitable_.~AwaitableT();
+        }
+    }
 
     // NB: these forwarders are specialized for TaskAwaitable, and would
     // need generalization to support non-Task awaitables
@@ -427,7 +448,8 @@ template <class Callable> class AwaitableLambda {
     AwaitableT& awaitable() {
         if (!task_.valid()) {
             task_ = callable_();
-            awaitable_ = task_.operator co_await();
+            static_assert(noexcept(AwaitableT(task_.operator co_await())));
+            new (&awaitable_) AwaitableT(task_.operator co_await());
         }
 
         return awaitable_;
@@ -435,7 +457,9 @@ template <class Callable> class AwaitableLambda {
 
     Callable callable_;
     TaskT task_;
-    AwaitableT awaitable_;
+    union {
+        AwaitableT awaitable_;
+    };
 };
 
 template <class Callable>
@@ -516,9 +540,7 @@ class [[nodiscard]] YieldImpl<Callable, void> : private Callable {
 template <class Callable>
 using Yield = YieldImpl<Callable, std::invoke_result_t<Callable>>;
 
-template <ValidImmediateAwaitable Aw> Aw staticAwaitableCheck(Aw&& aw) {
-    return std::forward<Aw>(aw);
-}
+template <ValidImmediateAwaitable Aw> consteval void staticAwaitableCheck() {}
 
 template <class T> decltype(auto) getAwaitable(T&& t) {
     static_assert(Awaitable<T>, "tried to co_await on not an awaitable");
@@ -526,20 +548,18 @@ template <class T> decltype(auto) getAwaitable(T&& t) {
     // clang-format off
     if constexpr (requires() {
             {std::forward<T>(t)} -> ImmediateAwaitable; }) {
-        // Explicit template argument so we can preserve a provided rvalue
-        // reference rather than moving into a new object. The referent
-        // was created in the co_await expression so it will live long
-        // enough for us and we can save a copy. Without the explicit argument,
-        // universal reference rules would infer Aw = T (which is what we
-        // want for the other calls where we're passing a temporary that was
-        // created in this function).
-        return staticAwaitableCheck<T&&>(std::forward<T>(t));
+        staticAwaitableCheck<T>();
+        return std::forward<T>(t);        
     } else if constexpr (requires() {
             {std::forward<T>(t).operator co_await()} -> ImmediateAwaitable; }) {
-        return staticAwaitableCheck(std::forward<T>(t).operator co_await());
+        using Ret = decltype(std::forward<T>(t).operator co_await());
+        staticAwaitableCheck<Ret>();
+        return std::forward<T>(t).operator co_await();
     } else if constexpr (requires() {
             {operator co_await(std::forward<T>(t))} -> ImmediateAwaitable; }) {
-        return staticAwaitableCheck(operator co_await(std::forward<T>(t)));
+        using Ret = decltype(operator co_await(std::forward<T>(t)));
+        staticAwaitableCheck<Ret>();
+        return operator co_await(std::forward<T>(t));
     } else {
         // if !Awaitable<T>, then the static_assert above fired and we don't
         // need to fire this one also
@@ -571,16 +591,12 @@ using AwaitableReturnType =
 ///     await_must_resume, await_introspect
 /// Many of the 'standardized' implementations for individual await_foo()
 /// methods are available as detail::awaitFoo() also.
-template <class Aw> struct AwaitableAdapter {
-    static_assert(ImmediateAwaitable<Aw>,
-                  "AwaitableAdapter must be initialized with an immediate "
-                  "awaitable; pass your object through getAwaitable().");
-
+template <class T, class Aw = AwaitableType<T>> struct AwaitableAdapter {
     using Ret = decltype(std::declval<Aw>().await_resume());
 
   public:
-    explicit AwaitableAdapter(Aw&& awaitable)
-      : awaitable_(staticAwaitableCheck<Aw&&>(std::forward<Aw>(awaitable))) {}
+    explicit AwaitableAdapter(T&& object)
+      : awaitable_(getAwaitable<T>(std::forward<T>(object))) {}
 
     bool await_ready() const noexcept {
         return checker_.readyReturned(awaitable_.await_ready());
@@ -643,61 +659,80 @@ template <class Aw> struct AwaitableAdapter {
 };
 
 
-/// A common part for corral::noncancellable() and corral::disposable().
-template <class T> class CancellableAdapter {
+template <class T, class... Args> class AwaitableMaker {
   public:
-    explicit CancellableAdapter(T&& object)
-      : object_(std::forward<T>(object)),
-        awaitable_(getAwaitable(std::forward<T>(object_))) {}
+    explicit AwaitableMaker(Args&&... args)
+      : args_(std::forward<Args>(args)...) {}
+
+    T operator co_await() && {
+        return std::make_from_tuple<T>(std::move(args_));
+    }
+
+  private:
+    std::tuple<Args...> args_;
+};
+
+
+// A common part of NoncancellableAdapter and DisposableAdapter.
+// Note: all three are meant to be used together with AwaitableMaker,
+// so they don't store the object they have been passed.
+template <class T> class CancellableAdapterBase {
+  protected:
+    using Aw = AwaitableType<T>;
+    Aw awaitable_;
+
+  public:
+    explicit CancellableAdapterBase(T&& object)
+      : awaitable_(getAwaitable(std::forward<T>(object))) {}
 
     void await_set_executor(Executor* ex) noexcept {
-        if constexpr (NeedsExecutor<AwaitableType<T>>) {
-            awaitable_.await_set_executor(ex);
-        }
+        awaitSetExecutor(awaitable_, ex);
     }
 
     bool await_ready() const noexcept { return awaitable_.await_ready(); }
-    bool await_early_cancel() noexcept { return false; }
     auto await_suspend(Handle h) { return awaitable_.await_suspend(h); }
-    bool await_must_resume() const noexcept { return true; }
-    decltype(auto) await_resume() & { return awaitable_.await_resume(); }
-    decltype(auto) await_resume() && {
-        return std::move(awaitable_).await_resume();
+    decltype(auto) await_resume() {
+        return std::forward<Aw>(awaitable_).await_resume();
     }
+};
 
+/// A wrapper around an awaitable that inhibits cancellation.
+template <class T>
+class NoncancellableAdapter : public CancellableAdapterBase<T> {
+  public:
+    using CancellableAdapterBase<T>::CancellableAdapterBase;
+
+    bool await_early_cancel() noexcept { return false; }
+    bool await_must_resume() const noexcept { return true; }
     void await_introspect(TaskTreeCollector& c) const noexcept {
         c.node("Noncancellable");
-        c.child(c);
+        c.child(this->awaitable_);
     }
-
-  protected:
-    T object_;
-    AwaitableType<T> awaitable_;
 };
+
 
 /// A wrapper around an awaitable declaring that its return value
 /// is safe to dispose of upon cancellation.
 /// May be used on third party awaitables which don't know about
 /// corral async's cancellation mechanism.
-template <class T>
-class DisposableAdapter : public detail::CancellableAdapter<T> {
+template <class T> class DisposableAdapter : public CancellableAdapterBase<T> {
   public:
-    explicit DisposableAdapter(T&& object)
-      : detail::CancellableAdapter<T>(std::forward<T>(object)) {}
+    using CancellableAdapterBase<T>::CancellableAdapterBase;
 
-    auto await_early_cancel() noexcept {
+    bool await_early_cancel() noexcept {
         return awaitEarlyCancel(this->awaitable_);
     }
-    auto await_cancel(Handle h) noexcept {
+    bool await_cancel(Handle h) noexcept {
         return awaitCancel(this->awaitable_, h);
     }
     auto await_must_resume() const noexcept { return std::false_type{}; }
 
     void await_introspect(TaskTreeCollector& c) const noexcept {
         c.node("Disposable");
-        c.child(c);
+        c.child(this->awaitable_);
     }
 };
+
 
 /// A utility class allowing expressing things like SuspendAlways
 /// as a global constant.
@@ -707,13 +742,13 @@ template <class T> class CoAwaitFactory {
 };
 
 /// A utility class kicking off an awaitable upon cancellation.
-template <class Aw> class RunOnCancel {
+template <class T> class RunOnCancel {
   public:
-    explicit RunOnCancel(Aw&& awaitable)
-      : awaitable_(std::forward<Aw>(awaitable)) {}
+    explicit RunOnCancel(T&& awaitable)
+      : adapter_(std::forward<T>(awaitable)) {}
 
     void await_set_executor(Executor* ex) noexcept {
-        awaitable_.await_set_executor(ex);
+        adapter_.await_set_executor(ex);
     }
 
     bool await_ready() const noexcept { return false; }
@@ -734,27 +769,28 @@ template <class Aw> class RunOnCancel {
         // it as "resume the handle ourselves, then return false" in
         // order to make sure await_must_resume() gets called to check
         // for exceptions.
-        if (awaitable_.await_ready()) {
+        if (adapter_.await_ready()) {
             h.resume();
         } else {
-            awaitable_.await_suspend(h).resume();
+            adapter_.await_suspend(h).resume();
         }
         return false;
     }
     auto await_must_resume() const noexcept {
-        awaitable_.await_resume(); // terminate() on any pending exception
+        adapter_.await_resume(); // terminate() on any pending exception
         return std::false_type{};
     }
 
     void await_introspect(TaskTreeCollector& c) const noexcept {
         c.node("RunOnCancel");
-        c.child(awaitable_);
+        c.child(adapter_);
     }
 
-  protected:
-    [[no_unique_address]] mutable AwaitableAdapter<Aw> awaitable_;
+  private:
+    mutable AwaitableAdapter<T> adapter_;
     bool cancelPending_ = false;
 };
+
 
 /// A set of helpers which allow storing rvalue and lvalue references,
 /// thus allowing them to appear in return types of tasks and awaitables.

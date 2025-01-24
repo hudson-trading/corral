@@ -66,7 +66,7 @@ concept ImmediateAwaitable = requires(T t, const T ct, Handle h) {
 } // namespace detail
 
 template <class T, class Ret = detail::Unspecified>
-concept Awaitable =
+concept Awaitable = 
     detail::ImmediateAwaitable<T, Ret>
     || requires(T t) {
         { std::forward<T>(t).operator co_await() } -> detail::ImmediateAwaitable<Ret>;

@@ -184,6 +184,8 @@ template <> struct ProxyFrameImpl<false> : public CoroutineFrame {
 struct ProxyFrame : public ProxyFrameImpl<frame_tags::HaveSpareBitsInPC> {
     static constexpr uintptr_t TAG = frame_tags::PROXY;
     ProxyFrame() { tagWith(TAG); }
+
+    ProxyFrame(const ProxyFrame&) = delete;
 };
 
 // A ProxyFrame that corresponds to an underlying task invocation, used in

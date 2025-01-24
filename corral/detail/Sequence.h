@@ -50,10 +50,10 @@ template <Awaitable First, class ThenFn> class Sequence : private ProxyFrame {
   public:
     Sequence(First first, ThenFn thenFn)
       : first_(std::move(first)),
-        firstAw_(getAwaitable(std::forward<First>(first_))),
+        firstAw_(std::forward<First>(first_)),
         thenFn_(std::move(thenFn)) {}
 
-    Sequence(Sequence&&) = default;
+    Sequence(Sequence&&) = delete;
 
     bool await_ready() const noexcept { return false; }
 
@@ -148,12 +148,12 @@ template <Awaitable First, class ThenFn> class Sequence : private ProxyFrame {
     struct SecondStage {
         [[no_unique_address]] AwaitableReturnType<First> firstValue;
         [[no_unique_address]] Second obj;
-        [[no_unique_address]] AwaitableAdapter<SecondAwaitable> aw;
+        [[no_unique_address]] AwaitableAdapter<Second&&, SecondAwaitable> aw;
 
         explicit SecondStage(Sequence* c)
           : firstValue(std::move(c->firstAw_).await_resume()),
             obj(getSecond(c->thenFn_, firstValue)),
-            aw(getAwaitable<Second&&>(std::forward<Second>(obj))) {}
+            aw(std::forward<Second>(obj)) {}
     };
 
     bool inFirstStage() const noexcept {
@@ -215,7 +215,7 @@ template <Awaitable First, class ThenFn> class Sequence : private ProxyFrame {
   private:
     Handle parent_;
     [[no_unique_address]] First first_;
-    [[no_unique_address]] AwaitableAdapter<AwaitableType<First>> firstAw_;
+    [[no_unique_address]] AwaitableAdapter<First> firstAw_;
 
     [[no_unique_address]] ThenFn thenFn_;
     mutable std::variant<Executor*,      // running first stage
@@ -228,7 +228,6 @@ template <Awaitable First, class ThenFn> class Sequence : private ProxyFrame {
     bool cancelling_ = false;
 };
 
-
 template <class ThenFn> class SequenceBuilder {
   public:
     explicit SequenceBuilder(ThenFn fn) : fn_(std::move(fn)) {}
@@ -238,7 +237,8 @@ template <class ThenFn> class SequenceBuilder {
                  std::invocable<ThenFn, AwaitableReturnType<First> &&> ||
                  std::invocable<ThenFn>)
     friend auto operator|(First&& first, SequenceBuilder&& builder) {
-        return Sequence(std::forward<First>(first), std::move(builder.fn_));
+        return makeAwaitable<Sequence<First, ThenFn>>(
+                std::forward<First>(first), std::move(builder.fn_));
     }
 
     // Allow right associativity of SequenceBuilder's

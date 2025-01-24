@@ -107,6 +107,17 @@ template <std::output_iterator<uintptr_t> OutIter> class AsyncStackTrace {
     OutIter out_;
 };
 
+/// A utility function which allows delayed construction of nonmoveable
+/// immediate awaitables.
+///
+/// The returned class is moveable (assuming the arguments are moveable),
+/// and has a one-shot `operator co_await() &&`, which will construct
+/// `T(forward<Args>(args...))` and return it.
+template <detail::ImmediateAwaitable T, class... Args>
+Awaitable auto makeAwaitable(Args&&... args) {
+    return detail::AwaitableMaker<T, Args...>(std::forward<Args>(args)...);
+}
+
 /// A wrapper around an awaitable suppressing its cancellation:
 ///
 ///    // If this line gets executed...
@@ -117,7 +128,7 @@ template <std::output_iterator<uintptr_t> OutIter> class AsyncStackTrace {
 ///    });
 ///    // ... and so is this one
 template <class Awaitable> auto noncancellable(Awaitable awaitable) {
-    return detail::CancellableAdapter<Awaitable>(
+    return makeAwaitable<detail::NoncancellableAdapter<Awaitable>>(
             std::forward<Awaitable>(awaitable));
 }
 
@@ -129,7 +140,7 @@ template <class Awaitable> auto noncancellable(Awaitable awaitable) {
 /// it only affects what happens _after the awaitable completes_
 /// when a cancellation has been requested.
 template <class Awaitable> auto disposable(Awaitable awaitable) {
-    return detail::DisposableAdapter<Awaitable>(
+    return makeAwaitable<detail::DisposableAdapter<Awaitable>>(
             std::forward<Awaitable>(awaitable));
 }
 
@@ -157,8 +168,7 @@ template <class Awaitable> auto disposable(Awaitable awaitable) {
 /// Make sure not to throw any exceptions from the awaitable, as they
 /// will terminate() the process.
 template <Awaitable<void> Aw> auto untilCancelledAnd(Aw&& awaitable) {
-    return detail::RunOnCancel<detail::AwaitableType<Aw>>(
-            detail::getAwaitable(std::forward<Aw>(awaitable)));
+    return makeAwaitable<detail::RunOnCancel<Aw>>(std::forward<Aw>(awaitable));
 }
 
 /// A helper macro useful in nursery bodies.

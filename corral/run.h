@@ -58,7 +58,7 @@ class Runner : private RunnerTracking, private TaskFrame {
             CORRAL_ASSERT(!ELTraits::isRunning(*eventLoop_));
         }
 
-        Executor executor(*eventLoop_, awaitable);
+        Executor executor(*eventLoop_, adapter);
         executor_ = &executor;
         Executor* prevExec =
                 std::exchange(RunnerTracking::currentExecutor(), &executor);
@@ -136,8 +136,7 @@ class Runner : private RunnerTracking, private TaskFrame {
 template <class EventLoop, class Awaitable>
 CORRAL_NOINLINE decltype(auto) run(EventLoop& eventLoop,
                                    Awaitable&& awaitable) {
-    return detail::Runner(eventLoop).run(
-            detail::getAwaitable(std::forward<Awaitable>(awaitable)));
+    return detail::Runner(eventLoop).run(std::forward<Awaitable>(awaitable));
 }
 
 /// Returns a pointer to the executor associated with the current

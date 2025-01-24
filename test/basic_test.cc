@@ -29,6 +29,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <ranges>
 #include <vector>
 
 #include "../corral/corral.h"
@@ -508,6 +509,47 @@ CORRAL_TEST_CASE("mux-range") {
         v.clear();
         co_await allOf(v);
     }
+
+#if !defined(__clang__) || __clang_major__ >= 16
+    // clang-15 does not compile this
+    CATCH_SECTION("moveable-range-1") {
+        co_await allOf(v |
+                       std::views::transform([&](Task<int>& x) -> Task<int>&& {
+                           return std::move(x);
+                       }));
+    }
+
+    CATCH_SECTION("moveable-range-2") {
+        co_await allOf(v |
+                       std::views::transform([&](Task<int>& x) -> Task<int> {
+                           return std::move(x);
+                       }));
+    }
+
+    CATCH_SECTION("rvalue-range") {
+        // Same as above, but construct awaitables on the fly
+        std::vector<int> ints{3, 2, 5};
+        co_await allOf(ints |
+                       std::views::transform([&](int x) { return task(x); }));
+    }
+#endif
+}
+
+struct NonmoveableAwaiter : detail::Noncopyable {
+    bool await_ready() const noexcept { return true; }
+    bool await_suspend(Handle) { return false; }
+    int await_resume() { return 42; }
+};
+
+struct NonmoveableAwaitable : detail::Noncopyable {
+    NonmoveableAwaiter operator co_await() { return {}; }
+};
+
+CORRAL_TEST_CASE("nonmoveable") {
+    int v = co_await NonmoveableAwaiter{};
+    CATCH_CHECK(v == 42);
+    v = co_await NonmoveableAwaitable{};
+    CATCH_CHECK(v == 42);
 }
 
 CORRAL_TEST_CASE("event") {
@@ -1382,6 +1424,50 @@ CORRAL_TEST_CASE("shared-cancel-self") {
     auto shared = Shared([&]() -> Task<> { co_await t.sleep(5ms); });
     auto parent = [&]() -> Task<void> { co_await shared; };
     co_await anyOf(parent(), parent());
+}
+
+CORRAL_TEST_CASE("disposable") {
+    auto [_, done] = co_await anyOf(t.sleep(3ms), [&]() -> Task<> {
+        co_await disposable(t.sleep(5ms, noncancellable));
+        CATCH_CHECK(!"should not reach here");
+    });
+    CATCH_CHECK(t.now() == 5ms);
+    CATCH_CHECK(!done);
+}
+
+CORRAL_TEST_CASE("complex-noncancellable-disposable-structure") {
+    int stage = 0;
+    auto checkStage = [&stage](int expected) {
+        CATCH_CHECK(stage == expected);
+        stage = expected + 1;
+    };
+    auto checkStageOnExit = [&](int expected) {
+        return ScopeGuard([expected, checkStage] { checkStage(expected); });
+    };
+
+    Event evt;
+    auto [_, done] = co_await anyOf(t.sleep(3ms), [&]() -> Task<> {
+        auto g2 = checkStageOnExit(2);
+        co_await disposable(
+                anyOf(corral::noncancellable(
+                              anyOf(evt,
+                                    [&]() -> Task<> {
+                                        auto g1 = checkStageOnExit(1);
+                                        co_await t.sleep(5ms);
+                                        CATCH_CHECK(!"should not reach here");
+                                    })),
+
+                      untilCancelledAnd([&]() -> Task<> {
+                          checkStage(0);
+                          evt.trigger();
+                          co_return;
+                      })));
+        CATCH_CHECK(!"should not reach here");
+    });
+
+    checkStage(3);
+    CATCH_CHECK(!done);
+    CATCH_CHECK(t.now() == 3ms);
 }
 
 CORRAL_TEST_CASE("semaphores") {

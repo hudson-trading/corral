@@ -72,10 +72,13 @@ static constexpr const detail::asio_awaitable_t<boost::asio::executor, false>
 
 namespace detail {
 
-template <class Self, bool ThrowOnError, class... Ret> class AsioAwaitableBase {
-    using Err = boost::system::error_code;
+template <bool ThrowOnError, class Init, class Args, class... Ret>
+class AsioAwaitableFactory;
+template <bool ThrowOnError, class... Ret> class TypeErasedAsioAwaitableFactory;
 
+template <class... Ret> class AsioAwaitableBase {
   protected:
+    using Err = boost::system::error_code;
     struct DoneCB {
         AsioAwaitableBase* aw_;
 
@@ -85,167 +88,168 @@ template <class Self, bool ThrowOnError, class... Ret> class AsioAwaitableBase {
 
         using cancellation_slot_type = boost::asio::cancellation_slot;
         cancellation_slot_type get_cancellation_slot() const {
-            return aw_->cancelSignal().slot();
+            return aw_->cancelSig_.slot();
         }
     };
 
+    void done(Err ec, Ret... ret) {
+        ec_ = ec;
+        ret_.emplace(std::forward<Ret>(ret)...);
+        std::exchange(parent_, std::noop_coroutine())();
+    }
+
+  protected:
+    Err ec_;
+    std::optional<std::tuple<Ret...>> ret_;
+    Handle parent_;
+    DoneCB doneCB_;
+    boost::asio::cancellation_signal cancelSig_;
+
+    template <bool, class, class, class...> friend class AsioAwaitableFactory;
+    template <bool, class...> friend class TypeErasedAsioAwaitableFactory;
+};
+
+
+template <class InitFn, bool ThrowOnError, class... Ret>
+class AsioAwaitable : private AsioAwaitableBase<Ret...> {
+    using Err = boost::system::error_code;
+
   public:
+    explicit AsioAwaitable(InitFn&& initFn)
+      : initFn_(std::forward<InitFn>(initFn)) {}
+
+    AsioAwaitable(AsioAwaitable&&) = delete;
+
     bool await_ready() const noexcept { return false; }
 
     void await_suspend(Handle h) {
-        new (&cancelSig_) boost::asio::cancellation_signal();
-        parent_ = h;
-        doneCB_ = DoneCB{this};
-        static_cast<Self*>(this)->kickOff();
+        this->parent_ = h;
+        this->doneCB_ = typename AsioAwaitableBase<Ret...>::DoneCB{this};
+        this->initFn_(this->doneCB_);
     }
 
     auto await_resume() noexcept(!ThrowOnError) {
         if constexpr (ThrowOnError) {
-            if (ec_) {
-                throw boost::system::system_error(ec_);
+            if (this->ec_) {
+                throw boost::system::system_error(this->ec_);
             }
 
             if constexpr (sizeof...(Ret) == 0) {
                 return;
             } else if constexpr (sizeof...(Ret) == 1) {
-                return std::move(std::get<0>(*ret_));
+                return std::move(std::get<0>(*this->ret_));
             } else {
-                return std::move(*ret_);
+                return std::move(*this->ret_);
             }
         } else {
             if constexpr (sizeof...(Ret) == 0) {
-                return ec_;
+                return this->ec_;
             } else {
-                return std::tuple_cat(std::make_tuple(ec_), std::move(*ret_));
+                return std::tuple_cat(std::make_tuple(this->ec_),
+                                      std::move(*this->ret_));
             }
         }
     }
 
     bool await_cancel(Handle) noexcept {
-        cancelSignal().emit(boost::asio::cancellation_type::all);
+        this->cancelSig_.emit(boost::asio::cancellation_type::all);
         return false;
     }
 
     bool await_must_resume() const noexcept {
-        return ec_ != boost::asio::error::operation_aborted;
-    }
-
-  protected:
-    auto& doneCB() { return doneCB_; }
-
-  private:
-    boost::asio::cancellation_signal& cancelSignal() {
-        return *std::launder(
-                reinterpret_cast<boost::asio::cancellation_signal*>(
-                        &cancelSig_));
-    }
-
-    void done(Err ec, Ret... ret) {
-        ec_ = ec;
-        ret_.emplace(std::forward<Ret>(ret)...);
-        cancelSignal().~cancellation_signal();
-        std::exchange(parent_, std::noop_coroutine())();
+        return this->ec_ != boost::asio::error::operation_aborted;
     }
 
   private:
-    template <class T>
-    using StorageFor = std::aligned_storage_t<sizeof(T), alignof(T)>;
-
-    Err ec_;
-    std::optional<std::tuple<Ret...>> ret_;
-    Handle parent_;
-    DoneCB doneCB_;
-
-    // cancellation_signal is nonmoveable, while AsioAwaitable needs
-    // to be moveable, so we use aligned_storage to store it.
-    //
-    // cancellation_signal lifetime spans from await_suspend() to done();
-    // AsioAwaitable is guaranteed not to get moved during that time window.
-    StorageFor<boost::asio::cancellation_signal> cancelSig_;
+    [[no_unique_address]] InitFn initFn_;
 };
 
 
 template <bool ThrowOnError, class Init, class Args, class... Ret>
-class AsioAwaitable
-  : public AsioAwaitableBase<AsioAwaitable<ThrowOnError, Init, Args, Ret...>,
-                             ThrowOnError,
-                             Ret...> {
-    using Base = AsioAwaitableBase<AsioAwaitable, ThrowOnError, Ret...>;
-    friend Base;
+class AsioAwaitableFactory {
+    using DoneCB = typename AsioAwaitableBase<Ret...>::DoneCB;
+
+    struct InitFn {
+        Init init_;
+        [[no_unique_address]] Args args_;
+
+        template <class... Ts>
+        explicit InitFn(Init&& init, Ts&&... ts)
+          : init_(std::forward<Init>(init)), args_(std::forward<Ts>(ts)...) {}
+
+        void operator()(DoneCB& doneCB) {
+            auto impl = [this, &doneCB]<class... A>(A&&... args) {
+                using Sig = void(boost::system::error_code, Ret...);
+                boost::asio::async_initiate<DoneCB, Sig>(
+                        std::move(init_), doneCB, std::forward<A>(args)...);
+            };
+            std::apply(impl, args_);
+        }
+    };
 
   public:
     template <class... Ts>
-    explicit AsioAwaitable(Init&& init, Ts&&... args)
-      : init_(std::forward<Init>(init)), args_(std::forward<Ts>(args)...) {}
+    explicit AsioAwaitableFactory(Init&& init, Ts&&... args)
+      : initFn_(std::forward<Init>(init), std::forward<Ts>(args)...) {}
 
-  private /*methods*/:
-    void kickOff() {
-        auto impl = [this]<class... A>(A&&... args) {
-            using Sig = void(boost::system::error_code, Ret...);
-            boost::asio::async_initiate<typename Base::DoneCB, Sig>(
-                    std::forward<Init>(init_), this->doneCB(),
-                    std::forward<A>(args)...);
-        };
-        std::apply(impl, args_);
+    ImmediateAwaitable auto operator co_await() && {
+        return AsioAwaitable<InitFn, ThrowOnError, Ret...>(
+                std::forward<InitFn>(initFn_));
     }
 
-  private /*fields*/:
-    Init init_;
-    [[no_unique_address]] Args args_;
-    template <bool, class...> friend class TypeErasedAsioAwaitable;
+  private:
+    InitFn initFn_;
+
+    friend TypeErasedAsioAwaitableFactory<ThrowOnError, Ret...>;
 };
 
 
-/// AsioAwaitable is parametrized by its initiation object (as it needs
+/// AsioAwaitableFactory is parametrized by its initiation object (as it needs
 /// to store it). `asio::async_result<>` does not have initiation among
 /// its type parameter list, yet needs to export something under dependent
 /// name `return_type`, which is used for asio-related functions still
 /// having an explicit return type (like Boost.Beast).
 ///
 /// To accommodate that, we have this class, which stores a type-erased
-/// initiation object, and is constructible from `AsioAwaitable`.
+/// initiation object, and is constructible from `AsioAwaitableFactory`.
 template <bool ThrowOnError, class... Ret>
-class TypeErasedAsioAwaitable
-  : public AsioAwaitableBase<TypeErasedAsioAwaitable<ThrowOnError, Ret...>,
-                             ThrowOnError,
-                             Ret...> {
-    using Base =
-            AsioAwaitableBase<TypeErasedAsioAwaitable, ThrowOnError, Ret...>;
-    friend Base;
+class TypeErasedAsioAwaitableFactory {
+    using DoneCB = typename AsioAwaitableBase<Ret...>::DoneCB;
+
+    struct InitFnBase {
+        virtual ~InitFnBase() = default;
+        virtual void operator()(DoneCB&) = 0;
+    };
+
+    template <class Impl> struct InitFnImpl : InitFnBase {
+        explicit InitFnImpl(Impl&& impl) : impl_(std::move(impl)) {}
+        void operator()(DoneCB& doneCB) override { impl_(doneCB); }
+
+      private:
+        [[no_unique_address]] Impl impl_;
+    };
 
     struct InitFn {
-        virtual ~InitFn() = default;
-        virtual void kickOff(typename Base::DoneCB&) = 0;
+        std::unique_ptr<InitFnBase> impl_;
+        template <class Impl>
+        explicit InitFn(Impl&& impl)
+          : impl_(std::make_unique<InitFnImpl<Impl>>(
+                    std::forward<Impl>(impl))) {}
+        void operator()(DoneCB& doneCB) { (*impl_)(doneCB); }
     };
-    template <class Init, class Args> struct InitFnImpl : InitFn {
-        Init init_;
-        Args args_;
-
-        InitFnImpl(Init&& init, Args&& args)
-          : init_(std::forward<Init>(init)), args_(std::move(args)) {}
-        void kickOff(typename Base::DoneCB& doneCB) override {
-            auto impl = [this, &doneCB]<class... A>(A&&... args) {
-                boost::asio::async_initiate<typename Base::DoneCB,
-                                            void(boost::system::error_code,
-                                                 Ret...)>(
-                        std::forward<Init>(init_), doneCB,
-                        std::forward<A>(args)...);
-            };
-            std::apply(impl, args_);
-        }
-    };
-
-    std::unique_ptr<InitFn> initFn_;
 
   public:
     template <class Init, class Args>
-    explicit(false) TypeErasedAsioAwaitable(
-            AsioAwaitable<ThrowOnError, Init, Args, Ret...>&& rhs)
-      : initFn_(std::make_unique<InitFnImpl<Init, Args>>(
-                std::move(rhs.init_), std::move(rhs.args_))) {}
+    explicit(false) TypeErasedAsioAwaitableFactory(
+            AsioAwaitableFactory<ThrowOnError, Init, Args, Ret...>&& rhs)
+      : initFn_(std::move(rhs.initFn_)) {}
+
+    ImmediateAwaitable auto operator co_await() && {
+        return AsioAwaitable<InitFn, ThrowOnError, Ret...>(std::move(initFn_));
+    }
 
   private:
-    void kickOff() { initFn_->kickOff(this->doneCB()); }
+    InitFn initFn_;
 };
 
 } // namespace detail
@@ -272,18 +276,19 @@ class async_result<::corral::detail::asio_awaitable_t<Executor, ThrowOnError>,
                    X(boost::system::error_code, Ret...)> {
   public:
     using return_type =
-            ::corral::detail::TypeErasedAsioAwaitable<ThrowOnError, Ret...>;
+            ::corral::detail::TypeErasedAsioAwaitableFactory<ThrowOnError,
+                                                             Ret...>;
 
-    /// Use `AsioAwaitable` here, so asio::async_*() functions which don't
-    /// use `return_type` and instead have `auto` for their return types
+    /// Use `AsioAwaitableFactory` here, so asio::async_*() functions which
+    /// don't use `return_type` and instead have `auto` for their return types
     /// will do without type erase.
     template <class Init, class... Args>
     static auto initiate(
             Init&& init,
             ::corral::detail::asio_awaitable_t<Executor, ThrowOnError>,
             Args... args) {
-        return ::corral::detail::AsioAwaitable<ThrowOnError, Init,
-                                               std::tuple<Args...>, Ret...>(
+        return ::corral::detail::AsioAwaitableFactory<
+                ThrowOnError, Init, std::tuple<Args...>, Ret...>(
                 std::forward<Init>(init), std::move(args)...);
     }
 };
@@ -307,8 +312,8 @@ class Timer {
         timer_.expires_from_now(delay);
     }
 
-    Awaitable<void> auto operator co_await() {
-        return timer_.async_wait(asio_awaitable);
+    ImmediateAwaitable auto operator co_await() {
+        return getAwaitable(timer_.async_wait(asio_awaitable));
     }
 
   private:

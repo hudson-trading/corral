@@ -66,26 +66,16 @@ template <class MuxT, class Aw> class MuxHelper : public ProxyFrame {
     MuxHelper(Aw&& aw)
       : mux_(nullptr, State::NotStarted), awaitable_(std::forward<Aw>(aw)) {}
 
-    MuxHelper(MuxHelper&& rhs) noexcept(
-            // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-            std::is_nothrow_move_constructible_v<Aw>)
-      : mux_(rhs.mux_), awaitable_(std::move(rhs.awaitable_)) {
-        CORRAL_ASSERT(state() == State::NotStarted);
-    }
-    MuxHelper& operator=(MuxHelper rhs) noexcept(
-            // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-            std::is_nothrow_move_constructible_v<Aw>) {
-        CORRAL_ASSERT(state() == State::NotStarted);
-        std::swap(mux_, rhs.mux_);
-        std::swap(awaitable_, rhs.awaitable_);
-    }
     ~MuxHelper() {
         if (state() == State::Succeeded) {
             reinterpret_cast<StorageType*>(storage_)->~StorageType();
         }
     }
 
-    static bool skippable() { return Skippable<Aw>; }
+    MuxHelper(const MuxHelper& rhs) = delete;
+    MuxHelper& operator=(const MuxHelper& rhs) = delete;
+
+    static bool skippable() { return Skippable<AwaitableType<Aw>>; }
 
     void setExecutor(Executor* ex) noexcept {
         if (state() == State::NotStarted ||
@@ -492,16 +482,16 @@ template <class Self, class... Awaitables>
 class MuxTuple : public MuxBase<Self> {
   public:
     explicit MuxTuple(Awaitables&&... awaitables)
-      : awaitables_(MuxHelper<Self, Awaitables>(
-                std::forward<Awaitables>(awaitables))...) {}
+      : awaitables_(std::forward<Awaitables>(awaitables)...) {}
 
     // See note in MuxBase::await_cancel() regarding why we only can propagate
     // Abortable if the mux completes when its first awaitable does
     static constexpr bool muxIsAbortable() {
-        return Self::minReady() == 1 && (Abortable<Awaitables> && ...);
+        return Self::minReady() == 1 &&
+               (Abortable<AwaitableType<Awaitables>> && ...);
     }
     static constexpr bool muxIsSkippable() {
-        return (Skippable<Awaitables> && ...);
+        return (Skippable<AwaitableType<Awaitables>> && ...);
     }
     static constexpr long size() noexcept { return sizeof...(Awaitables); }
 
@@ -704,43 +694,87 @@ class AllOf : public MuxTuple<AllOf<Awaitables...>, Awaitables...> {
 //
 
 template <class Self, class Range> class MuxRange : public MuxBase<Self> {
-    using Item = decltype(*std::declval<Range>().begin());
+    using Awaitable = decltype(*std::declval<Range>().begin());
+    using Helper = MuxHelper<MuxRange<Self, Range>, Awaitable>;
+
+    struct ItemWithoutAwaitable {
+        Helper helper;
+        explicit ItemWithoutAwaitable(Awaitable&& awaitable)
+          : helper(std::forward<Awaitable>(awaitable)) {}
+    };
+
+    struct ItemWithAwaitable {
+        Awaitable awaitable;
+        Helper helper;
+        explicit ItemWithAwaitable(Awaitable&& aw)
+          : awaitable(std::forward<Awaitable>(aw)),
+            helper(std::forward<Awaitable>(awaitable)) {}
+    };
+
+  protected:
+    using Item = std::conditional_t<std::is_reference_v<Awaitable>,
+                                    ItemWithoutAwaitable,
+                                    ItemWithAwaitable>;
 
   public:
     // See note in MuxBase::await_cancel() regarding why we only can propagate
     // Abortable if the mux completes when its first awaitable does
     static constexpr bool muxIsAbortable() {
-        return Self::doneOnFirstReady && Abortable<AwaitableType<Item>>;
+        return Self::doneOnFirstReady && Abortable<AwaitableType<Awaitable>>;
     }
     static constexpr bool muxIsSkippable() {
-        return Skippable<AwaitableType<Item>>;
+        return Skippable<AwaitableType<Awaitable>>;
     }
 
-    long size() const { return static_cast<long>(awaitables_.size()); }
+    long size() const { return count_; }
 
     explicit MuxRange(Range&& range) {
-        awaitables_.reserve(range.size());
-        for (auto& awaitable : range) {
-            awaitables_.emplace_back(getAwaitable(std::move(awaitable)));
+        items_ = reinterpret_cast<Item*>(operator new(
+                sizeof(Item) * range.size(), std::align_val_t{alignof(Item)}));
+
+        Item* p = items_;
+        try {
+            for (Awaitable&& awaitable : range) {
+                new (p) Item(std::forward<Awaitable>(awaitable));
+                ++p;
+            }
+        } catch (...) {
+            while (p != items_) {
+                (--p)->~Item();
+            }
+            operator delete(items_, std::align_val_t{alignof(Item)});
+            throw;
         }
+
+        count_ = p - items_;
     }
 
+    ~MuxRange() {
+        for (Item* p = items_ + count_; p != items_;) {
+            (--p)->~Item();
+        }
+        operator delete(items_, std::align_val_t{alignof(Item)});
+    }
+
+    MuxRange(MuxRange&&) = delete;
+    MuxRange(const MuxRange&) = delete;
+
     void await_set_executor(Executor* ex) noexcept {
-        for (auto& awaitable : awaitables_) {
-            awaitable.setExecutor(ex);
+        for (auto& item : items()) {
+            item.helper.setExecutor(ex);
         }
     }
 
     bool await_ready() const noexcept {
-        if (awaitables_.empty()) {
+        if (count_ == 0) {
             return true;
         }
         long nReady = 0;
         bool allCanSkipKickoff = true;
-        for (auto& awaitable : awaitables_) {
-            if (awaitable.ready()) {
+        for (auto& item : items()) {
+            if (item.helper.ready()) {
                 ++nReady;
-            } else if (!awaitable.skippable()) {
+            } else if (!item.helper.skippable()) {
                 allCanSkipKickoff = false;
             }
         }
@@ -749,38 +783,38 @@ template <class Self, class Range> class MuxRange : public MuxBase<Self> {
 
     bool await_suspend(Handle h) {
         bool ret = this->doSuspend(h);
-        for (auto& awaitable : awaitables_) {
-            awaitable.bind(*this);
+        for (auto& item : items()) {
+            item.helper.bind(*this);
         }
-        for (auto& awaitable : awaitables_) {
-            awaitable.suspend();
+        for (auto& item : items()) {
+            item.helper.suspend();
         }
         return ret;
     }
 
-    std::vector<Optional<AwaitableReturnType<Item>>> await_resume() && {
+    std::vector<Optional<AwaitableReturnType<Awaitable>>> await_resume() && {
         handleResumeWithoutSuspend();
         this->reraise();
-        std::vector<Optional<AwaitableReturnType<Item>>> ret;
-        ret.reserve(awaitables_.size());
-        for (auto& awaitable : awaitables_) {
-            ret.emplace_back(std::move(awaitable).asOptional());
+        std::vector<Optional<AwaitableReturnType<Awaitable>>> ret;
+        ret.reserve(count_);
+        for (auto& item : items()) {
+            ret.emplace_back(std::move(item.helper).asOptional());
         }
         return ret;
     }
 
     bool internalCancel() noexcept {
         bool allNowCancelled = true;
-        for (auto& awaitable : awaitables_) {
-            allNowCancelled &= awaitable.cancel();
+        for (auto& item : items()) {
+            allNowCancelled &= item.helper.cancel();
         }
         return allNowCancelled;
     }
 
     auto await_must_resume() const noexcept {
         bool anyMustResume = false;
-        for (auto& awaitable : awaitables_) {
-            anyMustResume |= awaitable.mustResume();
+        for (auto& item : items()) {
+            anyMustResume |= item.helper.mustResume();
         }
 
         // See note in MuxTuple::await_must_resume()
@@ -795,35 +829,35 @@ template <class Self, class Range> class MuxRange : public MuxBase<Self> {
     static constexpr bool doneOnFirstReady = false;
 
   protected:
-    auto& awaitables() { return awaitables_; }
-    const auto& awaitables() const { return awaitables_; }
+    std::span<Item> items() { return std::span(items_, count_); }
+    std::span<const Item> items() const { return std::span(items_, count_); }
 
     void handleResumeWithoutSuspend() {
-        if (!awaitables_.empty() && !awaitables_[0].isBound()) {
+        if (count_ != 0 && !items_[0].helper.isBound()) {
             // We skipped await_suspend because all awaitables were
             // ready or sync-cancellable. (All of the MuxHelpers have
             // bind() called at the same time; we check the first one
             // for convenience only.)
             this->doSuspend(std::noop_coroutine());
-            for (auto& awaitable : awaitables_) {
-                awaitable.bind(*static_cast<Self*>(this));
+            for (auto& item : items()) {
+                item.helper.bind(*static_cast<Self*>(this));
             }
-            for (auto& awaitable : awaitables_) {
-                awaitable.reportImmediateResult();
+            for (auto& item : items()) {
+                item.helper.reportImmediateResult();
             }
         }
     }
 
     void introspect(const char* name, auto& c) const noexcept {
         c.node(name);
-        for (auto& awaitable : awaitables_) {
-            awaitable.introspect(c);
+        for (auto& item : items()) {
+            item.helper.introspect(c);
         }
     }
 
   private:
-    std::vector<MuxHelper<MuxRange<Self, Range>, AwaitableType<Item>>>
-            awaitables_;
+    Item* items_;
+    long count_;
 };
 
 template <class Range>
@@ -855,7 +889,7 @@ class MostOfRange : public MuxRange<MostOfRange<Range>, Range> {
 
 template <class Range>
 class AllOfRange : public MuxRange<AllOfRange<Range>, Range> {
-    using Item = decltype(*std::declval<Range>().begin());
+    using Awaitable = decltype(*std::declval<Range>().begin());
 
   public:
     using AllOfRange::MuxRange::MuxRange;
@@ -863,19 +897,19 @@ class AllOfRange : public MuxRange<AllOfRange<Range>, Range> {
 
     bool await_must_resume() const noexcept {
         bool allMustResume = (this->size() > 0);
-        for (auto& awaitable : this->awaitables()) {
-            allMustResume &= awaitable.mustResume();
+        for (auto& item : this->items()) {
+            allMustResume &= item.helper.mustResume();
         }
         return this->hasException() || allMustResume;
     }
 
-    std::vector<AwaitableReturnType<Item>> await_resume() && {
+    std::vector<AwaitableReturnType<Awaitable>> await_resume() && {
         this->handleResumeWithoutSuspend();
         this->reraise();
-        std::vector<AwaitableReturnType<Item>> ret;
-        ret.reserve(this->awaitables().size());
-        for (auto& awaitable : this->awaitables()) {
-            ret.emplace_back(std::move(awaitable).result());
+        std::vector<AwaitableReturnType<Awaitable>> ret;
+        ret.reserve(this->items().size());
+        for (auto& item : this->items()) {
+            ret.emplace_back(std::move(item.helper).result());
         }
         return ret;
     }

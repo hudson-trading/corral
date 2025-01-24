@@ -147,7 +147,7 @@ class Shared<Object>::State : private detail::ProxyFrame,
 
   private:
     [[no_unique_address]] Object object_;
-    detail::AwaitableAdapter<AwaitableObj> awaitable_;
+    detail::AwaitableAdapter<Object&> awaitable_;
     detail::IntrusiveList<Awaitable> parents_;
     std::variant<std::monostate,
                  std::monostate,
@@ -170,8 +170,7 @@ class Shared<Object>::State : private detail::ProxyFrame,
 template <class Object>
 template <class... Args>
 Shared<Object>::State::State(Args&&... args)
-  : object_(std::forward<Args>(args)...),
-    awaitable_(detail::getAwaitable(object_)) {
+  : object_(std::forward<Args>(args)...), awaitable_(object_) {
     this->resumeFn = &State::trampoline;
 }
 
