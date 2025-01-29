@@ -39,14 +39,13 @@ struct TreeDumpElement {
             // the address it's currently suspended on.
             uintptr_t /*pc*/,
 
-            // If the tree node is an Introspectable awaitable,
+            // If the tree node is an Introspectable awaiter,
             // this holds its name, as reported by `node()` call.
             const char* /*name*/,
 
-            // If the tree node is an awaitable which is not Introspectable,
+            // If the tree node is an awaiter which is not Introspectable,
             // this holds its type.
-            const std::type_info* /*type*/>
-            value;
+            const std::type_info* /*type*/> value;
     int depth;
 };
 
@@ -95,8 +94,8 @@ class TaskTreeCollector {
     void* cookie_;
 };
 
-template <class Awaitable, std::invocable<const TreeDumpElement&> Sink>
-void dumpTaskTree(const Awaitable& awaitable, Sink&& sink) {
+template <class Awaiter, std::invocable<const TreeDumpElement&> Sink>
+void dumpTaskTree(const Awaiter& awaiter, Sink&& sink) {
     TaskTreeCollector collector(
             [](void* cookie, TreeDumpElement node) {
                 auto& sink_ =
@@ -104,16 +103,16 @@ void dumpTaskTree(const Awaitable& awaitable, Sink&& sink) {
                 sink_(std::move(node));
             },
             &sink);
-    if constexpr (std::is_same_v<Awaitable, Executor>) {
-        awaitable.collectTaskTree(collector);
+    if constexpr (std::is_same_v<Awaiter, Executor>) {
+        awaiter.collectTaskTree(collector);
     } else {
-        awaitIntrospect(awaitable, collector);
+        awaitIntrospect(awaiter, collector);
     }
 }
 
 template <std::output_iterator<TreeDumpElement> OutIt>
-OutIt dumpTaskTree(const auto& awaitable, OutIt out) {
-    dumpTaskTree(awaitable,
+OutIt dumpTaskTree(const auto& awaiter, OutIt out) {
+    dumpTaskTree(awaiter,
                  [&out](const TreeDumpElement& node) { *out++ = node; });
     return out;
 }

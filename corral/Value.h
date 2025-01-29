@@ -33,7 +33,7 @@ namespace corral {
 /// Allows suspending a task until the value of the variable, or a transition
 /// thereof, satisfies a predicate.
 template <class T> class Value {
-    class AwaitableBase;
+    class AwaiterBase;
     template <class Fn> class UntilMatches;
     template <class Fn> class UntilChanged;
 
@@ -94,7 +94,7 @@ template <class T> class Value {
 
   private:
     T value_;
-    detail::IntrusiveList<AwaitableBase> parked_;
+    detail::IntrusiveList<AwaiterBase> parked_;
 };
 
 
@@ -103,8 +103,8 @@ template <class T> class Value {
 //
 
 template <class T>
-class Value<T>::AwaitableBase
-  : public detail::IntrusiveListItem<Value<T>::AwaitableBase> {
+class Value<T>::AwaiterBase
+  : public detail::IntrusiveListItem<Value<T>::AwaiterBase> {
   public:
     void await_suspend(Handle h) {
         handle_ = h;
@@ -117,7 +117,7 @@ class Value<T>::AwaitableBase
     }
 
   protected:
-    explicit AwaitableBase(Value& cond) : cond_(cond) {}
+    explicit AwaiterBase(Value& cond) : cond_(cond) {}
 
     void park() { cond_.parked_.push_back(*this); }
     void doResume() { handle_.resume(); }
@@ -136,9 +136,9 @@ class Value<T>::AwaitableBase
 
 template <class T>
 template <class Fn>
-class Value<T>::UntilMatches : public AwaitableBase {
+class Value<T>::UntilMatches : public AwaiterBase {
   public:
-    UntilMatches(Value& cond, Fn fn) : AwaitableBase(cond), fn_(std::move(fn)) {
+    UntilMatches(Value& cond, Fn fn) : AwaiterBase(cond), fn_(std::move(fn)) {
         if (fn_(cond.value_)) {
             result_ = cond.value_;
         }
@@ -165,10 +165,10 @@ class Value<T>::UntilMatches : public AwaitableBase {
 
 template <class T>
 template <class Fn>
-class Value<T>::UntilChanged : public AwaitableBase {
+class Value<T>::UntilChanged : public AwaiterBase {
   public:
     explicit UntilChanged(Value& cond, Fn fn)
-      : AwaitableBase(cond), fn_(std::move(fn)) {}
+      : AwaiterBase(cond), fn_(std::move(fn)) {}
 
     bool await_ready() const noexcept { return false; }
     std::pair<T, T> await_resume() && { return std::move(*result_); }

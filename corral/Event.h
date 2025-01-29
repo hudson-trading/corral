@@ -61,7 +61,7 @@ namespace corral {
 ///
 class Event : public detail::ParkingLotImpl<Event> {
   public:
-    class Awaitable : public detail::ParkingLotImpl<Event>::Parked {
+    class Awaiter : public detail::ParkingLotImpl<Event>::Parked {
       public:
         using Parked::Parked;
         explicit operator bool() { return this->object().triggered(); }
@@ -69,6 +69,9 @@ class Event : public detail::ParkingLotImpl<Event> {
         void await_suspend(Handle h) { this->doSuspend(h); }
         void await_resume() {}
     };
+
+    using Awaitable = Awaiter; // backwards compatibility
+
 
     /// Trigger the event, waking any tasks that are waiting for it to
     /// occur.
@@ -82,18 +85,14 @@ class Event : public detail::ParkingLotImpl<Event> {
 
     /// Returns an awaitable which becomes ready when the event is triggered
     /// and is immediately ready if that has already happened.
-    [[nodiscard]] corral::Awaitable<void> auto get() {
-        return Awaitable(*this);
-    }
+    [[nodiscard]] corral::Awaitable<void> auto get() { return Awaiter(*this); }
 
     /// Alias for triggered() that allows generic code to use get() as
     /// a boolean regardless of the constness of the Event it's
     /// operating on.
     bool get() const noexcept { return triggered(); }
 
-    corral::Awaitable<void> auto operator co_await() {
-        return Awaitable(*this);
-    }
+    corral::Awaiter<void> auto operator co_await() { return Awaiter(*this); }
 
   private:
     bool triggered_ = false;

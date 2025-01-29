@@ -207,7 +207,7 @@ template <class... Ts> class CBPortal {
     CBPortal(CBPortal&&) = delete;
     CBPortal& operator=(CBPortal&&) = delete;
 
-    // Awaitable interface. The result type is as follows:
+    // Awaiter interface. The result type is as follows:
     // - `CBPortal<>`: `void`
     // - `CBPortal<T>`: `T`
     // - `CBPortal<Ts...>`: `std::tuple<Ts...>`
@@ -408,12 +408,12 @@ class CBPortalProxy : private detail::Noncopyable {
     static_assert(PortalsAreExternal || PortalsAreInline,
                   "all CBPortals must be either references or inline");
 
-    using MergedPortals = std::conditional_t<
+    using Awaitable = std::conditional_t<
             Singular,
             std::tuple_element_t<0,
                                  std::tuple<typename CBPortalTraits<
                                          CBPortals>::PortalType...>>&,
-            detail::AwaitableMaker<
+            detail::AwaiterMaker<
                     detail::AnyOf<
                             typename CBPortalTraits<CBPortals>::PortalType&...>,
                     typename CBPortalTraits<CBPortals>::PortalType&...>>;
@@ -428,7 +428,7 @@ class CBPortalProxy : private detail::Noncopyable {
       : initiateFn_(std::forward<InitiateFn>(initiateFn)),
         cancelFn_(std::forward<CancelFn>(cancelFn)),
         portals_(portals...),
-        awaitable_(makeAwaitable()) {
+        awaiter_(makeAwaiter()) {
         // With external portals, the user may have put a scope guard
         // in between the portal and the untilCBCalled() in order to
         // implement cancellation. We thus shouldn't propagate a
@@ -440,7 +440,7 @@ class CBPortalProxy : private detail::Noncopyable {
         requires(!PortalsAreExternal)
       : initiateFn_(std::forward<InitiateFn>(initiateFn)),
         cancelFn_(std::forward<CancelFn>(cancelFn)),
-        awaitable_(makeAwaitable()) {
+        awaiter_(makeAwaiter()) {
         // With internal portals, we own the portals and can propagate
         // cancellation immediately.
         setProxyStatus(ProxyStatus::NotStarted);
@@ -461,12 +461,12 @@ class CBPortalProxy : private detail::Noncopyable {
     }
 
     void await_set_executor(Executor* ex) noexcept {
-        CORRAL_ASSERT(!awaitable_.await_ready());
-        awaitable_.await_set_executor(ex);
+        CORRAL_ASSERT(!awaiter_.await_ready());
+        awaiter_.await_set_executor(ex);
     }
 
     void await_suspend(Handle h) {
-        awaitable_.await_suspend(h);
+        awaiter_.await_suspend(h);
 
         if (getProxyStatus() == ProxyStatus::NotStarted) {
             setProxyStatus(ProxyStatus::Scheduled);
@@ -515,27 +515,27 @@ class CBPortalProxy : private detail::Noncopyable {
                     return false;
                 }
                 cancelFn_();
-                return awaitable_.await_cancel(h);
+                return awaiter_.await_cancel(h);
         }
         CORRAL_ASSERT_UNREACHABLE();
         return true;
     }
 
-    bool await_must_resume() const noexcept { return awaitable_.await_ready(); }
+    bool await_must_resume() const noexcept { return awaiter_.await_ready(); }
 
     decltype(auto) await_resume() && {
         if (completed_) {
             *completed_ = true;
         }
-        return std::move(awaitable_).await_resume();
+        return std::move(awaiter_).await_resume();
     }
 
   private /*methods*/:
-    decltype(auto) makeAwaitable() {
+    decltype(auto) makeAwaiter() {
         if constexpr (Singular) {
             return std::get<0>(portals_);
         } else {
-            return getAwaitable(std::make_from_tuple<MergedPortals>(portals_));
+            return getAwaiter(std::make_from_tuple<Awaitable>(portals_));
         }
     }
 
@@ -552,7 +552,7 @@ class CBPortalProxy : private detail::Noncopyable {
     InitiateFn initiateFn_;
     CancelFn cancelFn_;
     std::tuple<typename CBPortalTraits<CBPortals>::PortalType...> portals_;
-    AwaitableType<MergedPortals> awaitable_;
+    AwaiterType<Awaitable> awaiter_;
 
     // If this is non-null, its pointee is set to true in await_resume().
     // This allows await_suspend() to notice that the CBPortalProxy object

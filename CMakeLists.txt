@@ -37,7 +37,7 @@ add_library(corral INTERFACE
     corral/detail/Promise.h
     corral/detail/Queue.h
     corral/detail/ScopeGuard.h
-    corral/detail/task_awaitables.h
+    corral/detail/TaskAwaiter.h
     corral/detail/utility.h
     corral/detail/wait.h
 )

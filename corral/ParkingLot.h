@@ -32,7 +32,7 @@ namespace corral {
 class ParkingLot : public detail::ParkingLotImpl<ParkingLot> {
   public:
     using Base = detail::ParkingLotImpl<ParkingLot>;
-    class Awaitable : public Base::Parked {
+    class Awaiter : public Base::Parked {
       public:
         using Parked::Parked;
         bool await_ready() const noexcept { return false; }
@@ -40,11 +40,11 @@ class ParkingLot : public detail::ParkingLotImpl<ParkingLot> {
         void await_resume() {}
     };
 
+    using Awaitable = Awaiter; // backwards compatibility
+
     /// Returns an awaitable which, when co_await'ed, suspends the caller
     /// until any of unpark*() functions are called.
-    [[nodiscard]] corral::Awaitable<void> auto park() {
-        return Awaitable(*this);
-    }
+    [[nodiscard]] corral::Awaiter<void> auto park() { return Awaiter(*this); }
 
     /// Resumes the earliest parked task, if any.
     void unparkOne() { return Base::unparkOne(); }

@@ -34,10 +34,10 @@
 
 namespace corral::detail {
 
-template <class T, class Self> class TaskAwaitableBase : private Noncopyable {
+template <class T, class Self> class TaskAwaiterBase : private Noncopyable {
   public:
-    TaskAwaitableBase() noexcept : promise_(nullptr) {}
-    explicit TaskAwaitableBase(Promise<T>* promise) noexcept
+    TaskAwaiterBase() noexcept : promise_(nullptr) {}
+    explicit TaskAwaiterBase(Promise<T>* promise) noexcept
       : promise_(promise) {}
 
     void await_set_executor(Executor* ex) noexcept {
@@ -106,17 +106,17 @@ template <> class TaskResultStorage<void> : public TaskParent<void> {
     Result<void> result_;
 };
 
-/// An awaitable returned by `Task::operator co_await()`.
+/// An awaiter returned by `Task::operator co_await()`.
 /// co_await'ing on it runs the task, suspending the parent until it
 /// completes.
 template <class T>
-class TaskAwaitable final : public TaskResultStorage<T>,
-                            public TaskAwaitableBase<T, TaskAwaitable<T>> {
-    using Base = TaskAwaitableBase<T, TaskAwaitable<T>>;
+class TaskAwaiter final : public TaskResultStorage<T>,
+                          public TaskAwaiterBase<T, TaskAwaiter<T>> {
+    using Base = TaskAwaiterBase<T, TaskAwaiter<T>>;
 
   public:
-    TaskAwaitable() = default;
-    explicit TaskAwaitable(Promise<T>* promise) : Base(promise) {}
+    TaskAwaiter() = default;
+    explicit TaskAwaiter(Promise<T>* promise) : Base(promise) {}
 
     T await_resume() && { return std::move(this->result_).value(); }
     bool await_must_resume() const noexcept {

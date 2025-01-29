@@ -128,7 +128,12 @@ extensions to the awaitable interface, including the names of several C++20
 concepts that can be used to describe awaitables which implement them in
 various ways.
 
-### The awaitable state machine
+As noted above, an awaitable object can define `await_*()` methods
+(such classes are called _awaiters_ in the C++ standard), or return
+an awaiter from `operator co_await()` (which can be a member or a free
+function).
+
+### The awaiter state machine
 
 There is an implicit state machine that controls the order in which
 corral can invoke the above methods, which is described in this section.
@@ -175,14 +180,14 @@ will be enabled that confirm the rules in this section are followed.
           suspend: await_suspend() called
            resume: handle.resume() called
 
-An awaitable may only be destroyed in the initial state (`Initial`, you
+An awaiter may only be destroyed in the initial state (`Initial`, you
 haven't yet touched it) or one of the terminal states (`Cancelled`, `Done`).
-In the typical case where the awaitable is stored as a temporary in the
+In the typical case where the awaiter is stored as a temporary in the
 awaiting task's coroutine frame, the destruction would occur once
 `await_resume()` finishes, or when the coroutine frame is destroyed
 to propagate a cancellation.
 
-* `Initial`: A new awaitable starts here. We don't know if it's ready yet, and
+* `Initial`: A new awaiter starts here. We don't know if it's ready yet, and
   need to check that before calling `await_suspend()`. We can also
   early-cancel before checking readiness.
   * Can call `await_early_cancel()`, transitioning to `Cancelled` if it
@@ -190,7 +195,7 @@ to propagate a cancellation.
   * Can call `await_ready()`, transitioning to `ReadyImmediately` if it
     returns true or `NotReady` otherwise.
 
-* `NotReady`: We know the awaitable is not ready, so we're allowed to
+* `NotReady`: We know the awaiter is not ready, so we're allowed to
   suspend it now. We can also check the readiness redundantly, or early-cancel.
   * Can call `await_early_cancel()`, transitioning to `Cancelled` if it
     returns true or `CancelPending` otherwise.
@@ -200,7 +205,7 @@ to propagate a cancellation.
     call. If it returns true, treat that as equivalent to a resumption of
     the handle we passed to `await_suspend()`.
 
-* `ReadyImmediately`: The awaitable was ready without a suspension.
+* `ReadyImmediately`: The awaiter was ready without a suspension.
   Since it didn't suspend yet, we can still try an early cancel, or
   else we can proceed to consume the result.
   * Can call `await_ready()` redundantly but it is expected to continue
@@ -210,13 +215,13 @@ to propagate a cancellation.
   * Otherwise, call `await_resume()` and transition to `Done`.
 
 * `InitialCxlPend`: We did an early-cancel and it did not succeed
-  immediately. We still don't know if the awaitable is ready, so need to
+  immediately. We still don't know if the awaiter is ready, so need to
   check that.
   * Call `await_ready()`, transitioning to `ReadyAfterCancel` if it
     returns true or `CancelPending` otherwise.
 
 * `CancelPending`: We did an early-cancel and it did not succeed
-  immediately. We also know the awaitable is not ready, so we can suspend.
+  immediately. We also know the awaiter is not ready, so we can suspend.
   And it's fine to check readiness redundantly as well.
   * Can call `await_ready()`, transitioning to `ReadyAfterCancel` if it
     returns true or staying in `CancelPending` otherwise.
@@ -248,14 +253,14 @@ to propagate a cancellation.
   * Call `await_resume()` and transition to `Done`.
 
 * `Done`: The operation has completed and we retrieved the result.
-  * Destroy the awaitable and continue with normal execution of the parent.
+  * Destroy the awaiter and continue with normal execution of the parent.
 
 * `Cancelled`: The operation completed via cancellation.
-  * Destroy the awaitable and propagate cancellation into the parent.
+  * Destroy the awaiter and propagate cancellation into the parent.
 
 Again, these states are shown for illustration purposes only;
 they are not stored anywhere (except when using the state-debugging
-`#define` explained above), and the awaitable is not required
+`#define` explained above), and the awaiter is not required
 to keep track of them.
 
 ### Example: wrapping a callback-based operation
@@ -480,12 +485,12 @@ this need: they capture `this` in lambdas they pass further down).
 This contradiction can be resolved by splitting the awaitable
 into two objects:
 
-* an _immediate awaitable_ or _operation state_ object, which defines the
-  ``await_*()`` methods; it logically represents the state of an in-progress
-  operation, and can be immovable;
+* an _operation state_ object, modelled by C++ _awaiter_ class
+  (that which defines the``await_*()`` methods); it logically
+  represents the state of an in-progress operation, and can be immovable;
 
-* a higher-level _operation description_ object that returns the immediate
-  awaitable from its `operator co_await()`; it logically describes
+* a higher-level _operation description_ object that returns the awaiter
+  from its `operator co_await()`; it logically describes
   which operation is to be done, but doesn't need to be involved
   in the process of performing it, and can therefore be movable.
 
@@ -497,9 +502,9 @@ Each Corral combiner or adaptor that wraps awaitables (`anyOf()`,
   co_await()` rather than the `await_*()` methods)
 
 * It returns a movable operation description object that, when awaited,
-  will construct an operation state that comprises operation states
-  constructed from its arguments; due to C++17 mandatory copy elision,
-  this can all be done in-place, allowing all the operation states
+  will construct an awaiter that comprises awaiters constructed
+  from its arguments; due to C++17 mandatory copy elision,
+  this can all be done in-place, allowing all the awaiters
   to be immovable.
 
 Adapting `AsyncRead` from the above example would therefore look

@@ -47,7 +47,7 @@ template <class Callable> auto yieldToRun(Callable cb) {
 }
 
 
-/// An awaitable similar to std::suspend_always, but with cancellation support.
+/// An awaiter similar to std::suspend_always, but with cancellation support.
 class SuspendForever {
   public:
     bool await_ready() const noexcept { return false; }
@@ -107,15 +107,15 @@ template <std::output_iterator<uintptr_t> OutIter> class AsyncStackTrace {
     OutIter out_;
 };
 
-/// A utility function which allows delayed construction of nonmoveable
-/// immediate awaitables.
+/// A utility function which allows delayed construction
+/// of nonmoveable awaiters.
 ///
 /// The returned class is moveable (assuming the arguments are moveable),
 /// and has a one-shot `operator co_await() &&`, which will construct
 /// `T(forward<Args>(args...))` and return it.
-template <detail::ImmediateAwaitable T, class... Args>
+template <Awaiter T, class... Args>
 Awaitable auto makeAwaitable(Args&&... args) {
-    return detail::AwaitableMaker<T, Args...>(std::forward<Args>(args)...);
+    return detail::AwaiterMaker<T, Args...>(std::forward<Args>(args)...);
 }
 
 /// A wrapper around an awaitable suppressing its cancellation:

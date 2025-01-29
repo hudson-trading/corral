@@ -42,7 +42,7 @@ namespace corral {
 namespace detail {
 
 template <class Aw>
-concept RootAwaitable = Introspectable<Aw> || ImmediateAwaitable<Aw>;
+concept RootAwaitable = Introspectable<Aw> || Awaiter<Aw>;
 
 }
 

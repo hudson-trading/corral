@@ -89,55 +89,55 @@ using RemoveRvalueReference_t = typename RemoveRvalueReference<T>::type;
 static_assert(std::is_same_v<RemoveRvalueReference_t<const int&>, const int&>);
 static_assert(std::is_same_v<RemoveRvalueReference_t<int&&>, int>);
 
-/// Mimics what the compiler does to obtain an awaitable from whatever
+/// Mimics what the compiler does to obtain an awaiter from whatever
 /// is passed to co_await, plus a fallback to support AwaitableLambda:
 /// any suitable `corral::detail::operator co_await(T&&)` will be
 /// considered even if it would not be found via ADL, as long as the
-/// `operator co_await` is declared before `getAwaitable()` is defined.
+/// `operator co_await` is declared before `getAwaiter()` is defined.
 /// You will need a corresponding 'ThisIsAwaitableTrustMe'
 /// specialization in order to make the object satisfy Awaitable, since
 /// the Awaitable concept was declared before the `operator co_await`.
 ///
 /// The return type of this function is as follows:
-/// - If T&& is ImmediateAwaitable, then T&&. (Like std::forward: you get
+/// - If T&& is Awaiter, then T&&. (Like std::forward: you get
 ///   a lvalue or rvalue reference depending on the value category of `t`,
 ///   and no additional object is created.)
 /// - If T&& defines operator co_await() returning value type A or rvalue
-///   reference A&&, then A. (The awaitable is constructed or moved into
+///   reference A&&, then A. (The awaiter is constructed or moved into
 ///   the return value slot.)
 /// - If T&& defines operator co_await() returning lvalue reference A&,
 ///   then A&. (We do not make a copy.)
 ///
 /// It is important to pay attention to the value category in order to
 /// avoid a dangling reference if a function constructs a combination of
-/// awaitables and then returns it. Typically the return value of
-/// getAwaitable(T&&) should be used to initialize an object of type
-/// AwaitableType<T&&>; AwaitableType will be a value type or lvalue
+/// awaiters and then returns it. Typically the return value of
+/// getAwaiter(T&&) should be used to initialize an object of type
+/// AwaiterType<T&&>; AwaiterType will be a value type or lvalue
 /// reference, but not an rvalue reference.
-template <class T> decltype(auto) getAwaitable(T&& t);
+template <class T> decltype(auto) getAwaiter(T&& t);
 
-/// Returns the type that getAwaitable() would return, stripped of any
+/// Returns the type that getAwaiter() would return, stripped of any
 /// rvalue-reference part (so you might get T or T&, but not T&&). This
 /// is the appropriate type to store in an object that wraps another
-/// awaitable(s).
+/// awaiter(s).
 template <class Aw>
-using AwaitableType =
-        RemoveRvalueReference_t<decltype(getAwaitable(std::declval<Aw>()))>;
+using AwaiterType =
+        RemoveRvalueReference_t<decltype(getAwaiter(std::declval<Aw>()))>;
 
 
 #if !defined(CORRAL_AWAITABLE_STATE_DEBUG)
 
-// A runtime validator for the awaitable state machine. This version
+// A runtime validator for the awaiter state machine. This version
 // should compile to nothing and be empty. The version in the other
 // branch of the #ifdef has the actual checking logic.
 // These are all noexcept so that any exceptions thrown immediately
 // crash the program.
-struct AwaitableStateChecker {
-    // Mark the end of using this checker to process a particular awaitable.
-    // Not necessary if it only handles one awaitable during its lifetime.
+struct AwaiterStateChecker {
+    // Mark the end of using this checker to process a particular awaiter.
+    // Not necessary if it only handles one awaiter during its lifetime.
     void reset() noexcept {}
 
-    // Like reset(), but don't check that the awaitable is in a valid state
+    // Like reset(), but don't check that the awaiter is in a valid state
     // to abandon.
     void forceReset() {}
 
@@ -175,10 +175,10 @@ struct AwaitableStateChecker {
 
 #else // defined(CORRAL_AWAITABLE_STATE_DEBUG)
 
-struct AwaitableStateChecker : ProxyFrame {
+struct AwaiterStateChecker : ProxyFrame {
     // See doc/02_adapting.md for much more detail on this state machine.
     enum class State {
-        Initial,          // We haven't done anything with the awaitable yet
+        Initial,          // We haven't done anything with the awaiter yet
         NotReady,         // We called await_ready() and it returned false
         InitialCxlPend,   // Initial + await_early_cancel() returned false
         CancelPending,    // NotReady + await_early_cancel() returned false
@@ -195,9 +195,9 @@ struct AwaitableStateChecker : ProxyFrame {
     bool hasExecutor_ = false;
     mutable State state_ = State::Initial;
 
-    AwaitableStateChecker() {
+    AwaiterStateChecker() {
         this->resumeFn = +[](CoroutineFrame* frame) {
-            auto* self = static_cast<AwaitableStateChecker*>(frame);
+            auto* self = static_cast<AwaiterStateChecker*>(frame);
             switch (self->state_) {
                 case State::Running:
                     self->state_ = State::Ready;
@@ -212,7 +212,7 @@ struct AwaitableStateChecker : ProxyFrame {
             self->realHandle_.resume();
         };
     }
-    ~AwaitableStateChecker() { reset(); }
+    ~AwaiterStateChecker() { reset(); }
 
     void reset() noexcept {
         // If you find that this assertion is firing in State::Ready or
@@ -326,23 +326,23 @@ struct AwaitableStateChecker : ProxyFrame {
 #endif // defined(CORRAL_AWAITABLE_STATE_DEBUG)
 
 //
-// Wrappers around await_*() awaitable functions
+// Wrappers around await_*() awaiter functions
 //
 
 /// A sanitized version of await_suspend() which always returns a Handle.
-template <class Aw, class Promise>
-Handle awaitSuspend(Aw&& awaitable, CoroutineHandle<Promise> h) {
+template <class Awaiter, class Promise>
+Handle awaitSuspend(Awaiter&& awaiter, CoroutineHandle<Promise> h) {
     // Note: Aw is unconstrained here, as awaitables requiring being
     // rvalue-qualified are still passed by lvalue (we're not consuming
     // them until await_resume()).
-    using RetType = decltype(std::forward<Aw>(awaitable).await_suspend(h));
+    using RetType = decltype(std::forward<Awaiter>(awaiter).await_suspend(h));
     if constexpr (std::is_same_v<RetType, void>) {
-        std::forward<Aw>(awaitable).await_suspend(h);
+        std::forward<Awaiter>(awaiter).await_suspend(h);
         return std::noop_coroutine();
     } else if constexpr (std::is_convertible_v<RetType, Handle>) {
-        return std::forward<Aw>(awaitable).await_suspend(h);
+        return std::forward<Awaiter>(awaiter).await_suspend(h);
     } else {
-        if (std::forward<Aw>(awaitable).await_suspend(h)) {
+        if (std::forward<Awaiter>(awaiter).await_suspend(h)) {
             return std::noop_coroutine();
         } else {
             return h;
@@ -350,46 +350,46 @@ Handle awaitSuspend(Aw&& awaitable, CoroutineHandle<Promise> h) {
     }
 }
 
-template <class Aw> auto awaitEarlyCancel(Aw& awaitable) noexcept {
-    if constexpr (CustomizesEarlyCancel<Aw>) {
-        return awaitable.await_early_cancel();
+template <class Awaiter> auto awaitEarlyCancel(Awaiter& awaiter) noexcept {
+    if constexpr (CustomizesEarlyCancel<Awaiter>) {
+        return awaiter.await_early_cancel();
     } else {
         return std::true_type{};
     }
 }
 
-template <class Aw> auto awaitCancel(Aw& awaitable, Handle h) noexcept {
-    if constexpr (Cancellable<Aw>) {
-        return awaitable.await_cancel(h);
+template <class Awaiter> auto awaitCancel(Awaiter& awaiter, Handle h) noexcept {
+    if constexpr (Cancellable<Awaiter>) {
+        return awaiter.await_cancel(h);
     } else {
         return false;
     }
 }
 
-template <class Aw> auto awaitMustResume(const Aw& awaitable) noexcept {
-    if constexpr (CustomizesMustResume<Aw>) {
-        return awaitable.await_must_resume();
-    } else if constexpr (CancelAlwaysSucceeds<Aw>) {
+template <class Awaiter> auto awaitMustResume(const Awaiter& awaiter) noexcept {
+    if constexpr (CustomizesMustResume<Awaiter>) {
+        return awaiter.await_must_resume();
+    } else if constexpr (CancelAlwaysSucceeds<Awaiter>) {
         return std::false_type{};
     } else {
-        static_assert(!Cancellable<Aw>);
+        static_assert(!Cancellable<Awaiter>);
         return true;
     }
 }
 
-template <class Aw>
-void awaitSetExecutor(Aw& awaitable, Executor* ex) noexcept {
-    if constexpr (NeedsExecutor<Aw>) {
-        awaitable.await_set_executor(ex);
+template <class Awaiter>
+void awaitSetExecutor(Awaiter& awaiter, Executor* ex) noexcept {
+    if constexpr (NeedsExecutor<Awaiter>) {
+        awaiter.await_set_executor(ex);
     }
 }
 
-template <class Aw>
-void awaitIntrospect(const Aw& awaitable, TaskTreeCollector& c) noexcept {
-    if constexpr (Introspectable<Aw>) {
-        awaitable.await_introspect(c);
+template <class Awaiter>
+void awaitIntrospect(const Awaiter& awaiter, TaskTreeCollector& c) noexcept {
+    if constexpr (Introspectable<Awaiter>) {
+        awaiter.await_introspect(c);
     } else {
-        c.node(&typeid(Aw));
+        c.node(&typeid(Awaiter));
     }
 }
 
@@ -400,7 +400,7 @@ void awaitIntrospect(const Aw& awaitable, TaskTreeCollector& c) noexcept {
 /// users to problems with lifetimes of lambda object themselves.
 template <class Callable> class AwaitableLambda {
     using TaskT = std::invoke_result_t<Callable>;
-    using AwaitableT = AwaitableType<TaskT>;
+    using Awaiter = AwaiterType<TaskT>;
 
   public:
     explicit AwaitableLambda(Callable&& c)
@@ -410,7 +410,7 @@ template <class Callable> class AwaitableLambda {
 
     ~AwaitableLambda() {
         if (task_.valid()) {
-            awaitable_.~AwaitableT();
+            awaiter_.~Awaiter();
         }
     }
 
@@ -425,40 +425,40 @@ template <class Callable> class AwaitableLambda {
     bool await_ready() const noexcept { return false; }
 
     void await_set_executor(Executor* ex) noexcept {
-        awaitable().await_set_executor(ex);
+        awaiter().await_set_executor(ex);
     }
-    auto await_suspend(Handle h) { return awaitable_.await_suspend(h); }
+    auto await_suspend(Handle h) { return awaiter_.await_suspend(h); }
     decltype(auto) await_resume() {
-        return std::forward<AwaitableT>(awaitable_).await_resume();
+        return std::forward<Awaiter>(awaiter_).await_resume();
     }
 
     auto await_early_cancel() noexcept {
-        return awaitable().await_early_cancel();
+        return awaiter().await_early_cancel();
     }
-    auto await_cancel(Handle h) noexcept { return awaitable_.await_cancel(h); }
+    auto await_cancel(Handle h) noexcept { return awaiter_.await_cancel(h); }
     auto await_must_resume() const noexcept {
-        return awaitable_.await_must_resume();
+        return awaiter_.await_must_resume();
     }
 
     void await_introspect(auto& c) const noexcept {
-        awaitable_.await_introspect(c);
+        awaiter_.await_introspect(c);
     }
 
   private:
-    AwaitableT& awaitable() {
+    Awaiter& awaiter() {
         if (!task_.valid()) {
             task_ = callable_();
-            static_assert(noexcept(AwaitableT(task_.operator co_await())));
-            new (&awaitable_) AwaitableT(task_.operator co_await());
+            static_assert(noexcept(Awaiter(task_.operator co_await())));
+            new (&awaiter_) Awaiter(task_.operator co_await());
         }
 
-        return awaitable_;
+        return awaiter_;
     }
 
     Callable callable_;
     TaskT task_;
     union {
-        AwaitableT awaitable_;
+        Awaiter awaiter_;
     };
 };
 
@@ -474,7 +474,7 @@ AwaitableLambda<Callable> operator co_await(Callable && c) {
 // returning Task<T> satisfy `Awaitable`. Note that compiler-generated
 // co_await logic outside of `namespace corral::detail` would similarly not
 // find it, but since our `BasePromise::await_transform()` uses
-// `corral::detail::getAwaitable()`, corral tasks can await lambdas.
+// `corral::detail::getAwaiter()`, corral tasks can await lambdas.
 // We specifically _don't_ want to enable this for non-corral tasks, because
 // they won't know to call `await_set_executor`, which prevents
 // AwaitableLambda from working.
@@ -540,32 +540,31 @@ class [[nodiscard]] YieldImpl<Callable, void> : private Callable {
 template <class Callable>
 using Yield = YieldImpl<Callable, std::invoke_result_t<Callable>>;
 
-template <ValidImmediateAwaitable Aw> consteval void staticAwaitableCheck() {}
+template <ValidAwaiter Aw> consteval void staticAwaiterCheck() {}
 
-template <class T> decltype(auto) getAwaitable(T&& t) {
+template <class T> decltype(auto) getAwaiter(T&& t) {
     static_assert(Awaitable<T>, "tried to co_await on not an awaitable");
 
     // clang-format off
-    if constexpr (requires() {
-            {std::forward<T>(t)} -> ImmediateAwaitable; }) {
-        staticAwaitableCheck<T>();
+    if constexpr (requires() { {std::forward<T>(t)} -> Awaiter; }) {
+        staticAwaiterCheck<T>();
         return std::forward<T>(t);        
     } else if constexpr (requires() {
-            {std::forward<T>(t).operator co_await()} -> ImmediateAwaitable; }) {
+            {std::forward<T>(t).operator co_await()} -> Awaiter; }) {
         using Ret = decltype(std::forward<T>(t).operator co_await());
-        staticAwaitableCheck<Ret>();
+        staticAwaiterCheck<Ret>();
         return std::forward<T>(t).operator co_await();
     } else if constexpr (requires() {
-            {operator co_await(std::forward<T>(t))} -> ImmediateAwaitable; }) {
+            {operator co_await(std::forward<T>(t))} -> Awaiter; }) {
         using Ret = decltype(operator co_await(std::forward<T>(t)));
-        staticAwaitableCheck<Ret>();
+        staticAwaiterCheck<Ret>();
         return operator co_await(std::forward<T>(t));
     } else {
         // if !Awaitable<T>, then the static_assert above fired and we don't
         // need to fire this one also
         static_assert(!Awaitable<T>,
                       "co_await argument satisfies Awaitable concept but "
-                      "we couldn't extract an ImmediateAwaitable from it");
+                      "we couldn't extract an Awaiter from it");
         return std::suspend_never{};
     }
     // clang-format on
@@ -580,9 +579,10 @@ using ReturnType = std::conditional_t<std::is_same_v<T, void>, Void, T>;
 
 template <class Aw>
 using AwaitableReturnType =
-        ReturnType<decltype(std::declval<AwaitableType<Aw>>().await_resume())>;
+        ReturnType<decltype(std::declval<AwaiterType<Aw>>().await_resume())>;
 
-/// An adapter which sanitizes an awaitable in these ways:
+/// An adapter which extracts the awaiter from an awaitable
+/// and sanitizes it in these ways:
 ///   - its await_suspend() always returns a coroutine_handle<>;
 ///   - its await_resume() always returns something which can be stored
 ///     in a local variable or stuffed into std::variant or std::tuple;
@@ -591,60 +591,64 @@ using AwaitableReturnType =
 ///     await_must_resume, await_introspect
 /// Many of the 'standardized' implementations for individual await_foo()
 /// methods are available as detail::awaitFoo() also.
-template <class T, class Aw = AwaitableType<T>> struct AwaitableAdapter {
-    using Ret = decltype(std::declval<Aw>().await_resume());
+///
+/// If `operator co_await()` returns an rvalue reference, it will be moved
+/// into the adapter to avoid any dangling references. This can be overridden
+/// by explicitly specifying the Awaiter type to be an rvalue reference.
+template <class T, class Awaiter = AwaiterType<T>> struct SanitizedAwaiter {
+    using Ret = decltype(std::declval<Awaiter>().await_resume());
 
   public:
-    explicit AwaitableAdapter(T&& object)
-      : awaitable_(getAwaitable<T>(std::forward<T>(object))) {}
+    explicit SanitizedAwaiter(T&& object)
+      : awaiter_(getAwaiter<T>(std::forward<T>(object))) {}
 
     bool await_ready() const noexcept {
-        return checker_.readyReturned(awaitable_.await_ready());
+        return checker_.readyReturned(awaiter_.await_ready());
     }
 
     [[nodiscard]] Handle await_suspend(Handle h) {
 #ifdef CORRAL_AWAITABLE_STATE_DEBUG
         try {
-            return awaitSuspend(awaitable_, checker_.aboutToSuspend(h));
+            return awaitSuspend(awaiter_, checker_.aboutToSuspend(h));
         } catch (...) {
             checker_.suspendThrew();
             throw;
         }
 #else
-        return awaitSuspend(awaitable_, h);
+        return awaitSuspend(awaiter_, h);
 #endif
     }
 
     decltype(auto) await_resume() {
         checker_.aboutToResume();
         if constexpr (std::is_same_v<Ret, void>) {
-            std::forward<Aw>(awaitable_).await_resume();
+            std::forward<Awaiter>(awaiter_).await_resume();
             return Void{};
         } else {
-            return std::forward<Aw>(awaitable_).await_resume();
+            return std::forward<Awaiter>(awaiter_).await_resume();
         }
     }
 
     auto await_early_cancel() noexcept {
-        return checker_.earlyCancelReturned(awaitEarlyCancel(awaitable_));
+        return checker_.earlyCancelReturned(awaitEarlyCancel(awaiter_));
     }
     auto await_cancel(Handle h) noexcept {
         return checker_.cancelReturned(
-                awaitCancel(awaitable_, checker_.aboutToCancel(h)));
+                awaitCancel(awaiter_, checker_.aboutToCancel(h)));
     }
     auto await_must_resume() const noexcept {
-        return checker_.mustResumeReturned(awaitMustResume(awaitable_));
+        return checker_.mustResumeReturned(awaitMustResume(awaiter_));
     }
 
     void await_set_executor(Executor* ex) noexcept {
         checker_.aboutToSetExecutor();
-        if constexpr (NeedsExecutor<Aw>) {
-            awaitable_.await_set_executor(ex);
+        if constexpr (NeedsExecutor<Awaiter>) {
+            awaiter_.await_set_executor(ex);
         }
     }
 
     void await_introspect(TaskTreeCollector& c) const noexcept {
-        awaitIntrospect(awaitable_, c);
+        awaitIntrospect(awaiter_, c);
     }
 
     // Used by Runner::run() if the event loop stops before the
@@ -654,14 +658,14 @@ template <class T, class Aw = AwaitableType<T>> struct AwaitableAdapter {
     void abandon() { checker_.forceReset(); }
 
   private:
-    [[no_unique_address]] AwaitableStateChecker checker_;
-    Aw awaitable_;
+    [[no_unique_address]] AwaiterStateChecker checker_;
+    Awaiter awaiter_;
 };
 
 
-template <class T, class... Args> class AwaitableMaker {
+template <class T, class... Args> class AwaiterMaker {
   public:
-    explicit AwaitableMaker(Args&&... args)
+    explicit AwaiterMaker(Args&&... args)
       : args_(std::forward<Args>(args)...) {}
 
     T operator co_await() && {
@@ -678,21 +682,21 @@ template <class T, class... Args> class AwaitableMaker {
 // so they don't store the object they have been passed.
 template <class T> class CancellableAdapterBase {
   protected:
-    using Aw = AwaitableType<T>;
-    Aw awaitable_;
+    using Awaiter = AwaiterType<T>;
+    Awaiter awaiter_;
 
   public:
     explicit CancellableAdapterBase(T&& object)
-      : awaitable_(getAwaitable(std::forward<T>(object))) {}
+      : awaiter_(getAwaiter(std::forward<T>(object))) {}
 
     void await_set_executor(Executor* ex) noexcept {
-        awaitSetExecutor(awaitable_, ex);
+        awaitSetExecutor(awaiter_, ex);
     }
 
-    bool await_ready() const noexcept { return awaitable_.await_ready(); }
-    auto await_suspend(Handle h) { return awaitable_.await_suspend(h); }
+    bool await_ready() const noexcept { return awaiter_.await_ready(); }
+    auto await_suspend(Handle h) { return awaiter_.await_suspend(h); }
     decltype(auto) await_resume() {
-        return std::forward<Aw>(awaitable_).await_resume();
+        return std::forward<Awaiter>(awaiter_).await_resume();
     }
 };
 
@@ -706,7 +710,7 @@ class NoncancellableAdapter : public CancellableAdapterBase<T> {
     bool await_must_resume() const noexcept { return true; }
     void await_introspect(TaskTreeCollector& c) const noexcept {
         c.node("Noncancellable");
-        c.child(this->awaitable_);
+        c.child(this->awaiter_);
     }
 };
 
@@ -720,16 +724,16 @@ template <class T> class DisposableAdapter : public CancellableAdapterBase<T> {
     using CancellableAdapterBase<T>::CancellableAdapterBase;
 
     bool await_early_cancel() noexcept {
-        return awaitEarlyCancel(this->awaitable_);
+        return awaitEarlyCancel(this->awaiter_);
     }
     bool await_cancel(Handle h) noexcept {
-        return awaitCancel(this->awaitable_, h);
+        return awaitCancel(this->awaiter_, h);
     }
     auto await_must_resume() const noexcept { return std::false_type{}; }
 
     void await_introspect(TaskTreeCollector& c) const noexcept {
         c.node("Disposable");
-        c.child(this->awaitable_);
+        c.child(this->awaiter_);
     }
 };
 
@@ -742,13 +746,13 @@ template <class T> class CoAwaitFactory {
 };
 
 /// A utility class kicking off an awaitable upon cancellation.
-template <class T> class RunOnCancel {
+template <class Awaitable> class RunOnCancel {
   public:
-    explicit RunOnCancel(T&& awaitable)
-      : adapter_(std::forward<T>(awaitable)) {}
+    explicit RunOnCancel(Awaitable&& awaitable)
+      : awaiter_(std::forward<Awaitable>(awaitable)) {}
 
     void await_set_executor(Executor* ex) noexcept {
-        adapter_.await_set_executor(ex);
+        awaiter_.await_set_executor(ex);
     }
 
     bool await_ready() const noexcept { return false; }
@@ -769,25 +773,25 @@ template <class T> class RunOnCancel {
         // it as "resume the handle ourselves, then return false" in
         // order to make sure await_must_resume() gets called to check
         // for exceptions.
-        if (adapter_.await_ready()) {
+        if (awaiter_.await_ready()) {
             h.resume();
         } else {
-            adapter_.await_suspend(h).resume();
+            awaiter_.await_suspend(h).resume();
         }
         return false;
     }
     auto await_must_resume() const noexcept {
-        adapter_.await_resume(); // terminate() on any pending exception
+        awaiter_.await_resume(); // terminate() on any pending exception
         return std::false_type{};
     }
 
     void await_introspect(TaskTreeCollector& c) const noexcept {
         c.node("RunOnCancel");
-        c.child(adapter_);
+        c.child(awaiter_);
     }
 
   private:
-    mutable AwaitableAdapter<T> adapter_;
+    mutable SanitizedAwaiter<Awaitable> awaiter_;
     bool cancelPending_ = false;
 };
 

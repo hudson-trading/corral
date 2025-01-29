@@ -36,8 +36,9 @@ namespace corral {
 /// `release()` increments the counter. `lock()` returns an RAII guard that
 /// wraps `acquire()` and `release()`.
 class Semaphore : public detail::ParkingLotImpl<Semaphore> {
+    template <class Retval> class Awaiter;
+
   public:
-    template <class Retval> class Awaitable;
     class Lock;
 
     explicit Semaphore(size_t initial = 1) : value_(initial) {}
@@ -80,14 +81,14 @@ class [[nodiscard]] Semaphore::Lock {
 
   private:
     explicit Lock(Semaphore& sem) : sem_(&sem) {}
-    friend class Semaphore::Awaitable<Lock>;
+    friend class Semaphore::Awaiter<Lock>;
 
   private:
     Semaphore* sem_ = nullptr;
 };
 
 template <class Retval>
-class Semaphore::Awaitable : public detail::ParkingLotImpl<Semaphore>::Parked {
+class Semaphore::Awaiter : public detail::ParkingLotImpl<Semaphore>::Parked {
   public:
     using Parked::Parked;
     bool await_ready() const noexcept { return this->object().value() > 0; }
@@ -103,11 +104,11 @@ class Semaphore::Awaitable : public detail::ParkingLotImpl<Semaphore>::Parked {
 };
 
 inline corral::Awaitable<void> auto Semaphore::acquire() {
-    return Awaitable<void>(*this);
+    return Awaiter<void>(*this);
 }
 
 inline corral::Awaitable<Semaphore::Lock> auto Semaphore::lock() {
-    return Awaitable<Lock>(*this);
+    return Awaiter<Lock>(*this);
 }
 
 inline void Semaphore::release() {

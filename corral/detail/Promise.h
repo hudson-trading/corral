@@ -46,7 +46,7 @@ class RethrowCurrentException;
 /// An object that can serve as the parent of a task. It receives the task's
 /// result (value, exception, or cancellation) and can indicate where
 /// execution should proceed after the task completes. This is implemented
-/// by TaskAwaitable (detail/task_awaitables.h) and Nursery.
+/// by TaskAwaiter (detail/TaskAwaiter.h) and Nursery.
 ///
 /// BaseTaskParent contains the parts that do not depend on the task's return
 /// type.
@@ -93,14 +93,15 @@ template <> class TaskParent<void> : public BaseTaskParent {
 /// The promise type for a corral coroutine. (Promise<T> adds the parts
 /// that depend on the task's return type.)
 class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
-    /// Type-erased cancellation related portion of awaitable interface.
-    /// This captures how to cancel an awaitable the task is waiting
+    /// Type-erased cancellation related portion of awaiter interface.
+    /// This captures how to cancel an awaiter the task is waiting
     /// on, if any; otherwise its storage may be reused for denoting
     /// task status (ready / running / cancelled).
-    class Awaitee {
+    class TypeErasedAwaiter {
       public:
         template <class T>
-        explicit Awaitee(T& object) : Awaitee(&object, functions<T>()) {}
+        explicit TypeErasedAwaiter(T& object)
+          : TypeErasedAwaiter(&object, functions<T>()) {}
 
         bool cancel(Handle h) noexcept {
             return functions_->cancel(object_, h);
@@ -138,7 +139,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
             return &ret;
         }
 
-        Awaitee(void* object, const IFunctions* functions)
+        TypeErasedAwaiter(void* object, const IFunctions* functions)
           : object_(object), functions_(functions) {}
 
       private:
@@ -146,9 +147,9 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
         const IFunctions* functions_ = nullptr;
     };
 
-    // Awaitee lives in a union
-    static_assert(std::is_trivially_copyable_v<Awaitee>);
-    static_assert(std::is_trivially_destructible_v<Awaitee>);
+    // TypeErasedAwaiter lives in a union
+    static_assert(std::is_trivially_copyable_v<TypeErasedAwaiter>);
+    static_assert(std::is_trivially_destructible_v<TypeErasedAwaiter>);
 
   public:
     BasePromise(BasePromise&&) = delete;
@@ -161,8 +162,8 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     /// If its current awaitee (if any) supports cancellation,
     /// proxies the request to the awaitee; otherwise marks the task
     /// as pending cancellation, and any further `co_await`
-    /// on a cancellable awaitable would result in immediate cancellation
-    /// of the awaitable.
+    /// on a cancellable awaiter would result in immediate cancellation
+    /// of the task.
     ///
     /// In either case, if the awaitee is in fact cancelled (as opposed to
     /// to completing its operation despite the cancellation request), the
@@ -171,7 +172,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     void cancel() {
         CORRAL_TRACE("pr %p cancellation requested", this);
 
-        if (!hasAwaitee()) {
+        if (!hasAwaiter()) {
             // Mark pending cancellation; coroutine will be cancelled
             // at its next suspension point (for running coroutines) or when
             // executed by executor (for ready coroutines). This is a no-op
@@ -182,7 +183,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
             // its resume point, and forward cancellation request to the
             // awaitee
             onResume<&BasePromise::doResumeAfterCancel>();
-            if (awaitee_.cancel(proxyHandle())) {
+            if (awaiter_.cancel(proxyHandle())) {
                 propagateCancel();
             }
         }
@@ -213,8 +214,8 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
         } else if (state_ == State::Running) {
             c.footnote("<ON CPU>");
         } else {
-            CORRAL_ASSERT(hasAwaitee());
-            awaitee_.introspect(c);
+            CORRAL_ASSERT(hasAwaiter());
+            awaiter_.introspect(c);
         }
     }
 
@@ -307,7 +308,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     /// is passed to awaitees.
     Handle proxyHandle() noexcept { return CoroutineFrame::toHandle(); }
 
-    bool hasAwaitee() const noexcept { return state_ > State::Stub; }
+    bool hasAwaiter() const noexcept { return state_ > State::Stub; }
     bool hasCoroutine() const noexcept { return state_ != State::Stub; }
 
     template <void (BasePromise::* trampolineFn)()> void onResume() {
@@ -345,7 +346,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     /// Called when this task's awaitee completes after its cancellation was
     /// requested but didn't succeed immediately.
     void doResumeAfterCancel() {
-        if (hasAwaitee() && awaitee_.mustResume()) {
+        if (hasAwaiter() && awaiter_.mustResume()) {
             // This awaitee completed normally, so don't propagate the
             // cancellation. Attempt it again on the next co_await.
             cancelState_ = CancelState::Requested;
@@ -365,35 +366,37 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
         parent->continuation(this).resume();
     }
 
-    /// Hooks onto Aw::await_suspend() and keeps track of the awaitable
+    /// Hooks onto Aw::await_suspend() and keeps track of the awaiter
     /// so cancellation can be arranged if necessary.
     ///
     /// This function is called when *this* task blocks on an
-    /// Awaitable.
-    template <class Awaitee> Handle hookAwaitSuspend(Awaitee& awaitee) {
+    /// awaiter.
+    template <class Awaiter> Handle hookAwaitSuspend(Awaiter& awaiter) {
         bool cancelRequested = (cancelState_ == CancelState::Requested);
         CORRAL_TRACE("pr %p suspended%s on...", this,
                      cancelRequested ? " (with pending cancellation)" : "");
-        awaitee_ = BasePromise::Awaitee(awaitee); // this resets cancelState_
+
+        awaiter_ = BasePromise::TypeErasedAwaiter(awaiter);
+        // this resets cancelState_
 
         if (cancelRequested) {
-            if (awaitEarlyCancel(awaitee)) {
-                CORRAL_TRACE("    ... early-cancelled awaitee (skipped)");
+            if (awaitEarlyCancel(awaiter)) {
+                CORRAL_TRACE("    ... early-cancelled awaiter (skipped)");
                 propagateCancel();
                 return std::noop_coroutine();
             }
             onResume<&BasePromise::doResumeAfterCancel>();
-            if (awaitee.await_ready()) {
-                CORRAL_TRACE("    ... already-ready awaitee");
+            if (awaiter.await_ready()) {
+                CORRAL_TRACE("    ... already-ready awaiter");
                 return proxyHandle();
             }
         } else {
             onResume<&BasePromise::doResume>();
         }
-        awaitee.await_set_executor(executor_);
+        awaiter.await_set_executor(executor_);
 
         try {
-            return detail::awaitSuspend(awaitee, proxyHandle());
+            return detail::awaitSuspend(awaiter, proxyHandle());
         } catch (...) {
             CORRAL_TRACE("pr %p: exception thrown from await_suspend", this);
             state_ = State::Running;
@@ -416,13 +419,13 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     Executor* executor_ = nullptr;
     BaseTaskParent* parent_ = nullptr;
 
-    // These enums live in a union with Awaitee, so their values must
+    // These enums live in a union with TypeErasedAwaiter, so their values must
     // be distinguishable from the possible object representations of an
-    // Awaitee. Awaitee consists of two non-null pointers. The first
-    // (Awaitee::object_, aliased with State) is not aligned, but we can
-    // reasonably assume that 0x1 and 0x2 are not valid addresses.
-    // The second (Awaitee::functions_, aliased with CancelState) is aligned
-    // to a word size.
+    // TypeErasedAwaiter. TypeErasedAwaiter consists of two non-null pointers.
+    // The first (TypeErasedAwaiter::object_, aliased with State) is not
+    // aligned, but we can reasonably assume that 0x1 and 0x2 are not valid
+    // addresses. The second (TypeErasedAwaiter::functions_, aliased with
+    // CancelState) is aligned to a word size.
     enum class State : size_t { Ready = 0, Running = 1, Stub = 2 };
     enum class CancelState : size_t { None = 0, Requested = 1 };
 
@@ -433,14 +436,14 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     ///   (i.e., whose proxyHandle() resume()d)
     /// - State::Running for tasks being executed at the moment
     ///   (i.e., whose realHandle() resume()d);
-    /// otherwise the task is suspended on an awaitable, and awaitee_
+    /// otherwise the task is suspended on an awaiter, and awaiter_
     /// is populated accordingly.
     ///
     /// Furthermore, for running or ready tasks,
     /// cancelState == CancelState::Requested if cancel() has been called
     /// (such a task will get cancelled as soon as possible).
     union {
-        Awaitee awaitee_;
+        TypeErasedAwaiter awaiter_;
         struct {
             State state_;
             CancelState cancelState_;
@@ -461,16 +464,16 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     };
 
     /// A proxy which allows Promise to have control over its own suspension.
-    template <class T> class AwaitProxy {
-        // Use decltype instead of AwaitableType in order to reference
-        // (rather than moving) an incoming Awaitee&& that is
-        // ImmediateAwaitable; even if it's a temporary, it will live for
+    template <class Awaitable> class AwaitProxy {
+        // Use decltype instead of AwaiterType in order to reference
+        // (rather than moving) an incoming Awaitable&& that is
+        // Awaiter; even if it's a temporary, it will live for
         // the entire co_await expression including suspension.
-        using AwaitableType = decltype(getAwaitable(std::declval<T>()));
+        using AwaiterType = decltype(getAwaiter(std::declval<Awaitable>()));
 
       public:
-        AwaitProxy(BasePromise* promise, T&& wrapped)
-          : awaitee_(std::forward<T>(wrapped)), promise_(promise) {}
+        AwaitProxy(BasePromise* promise, Awaitable&& awaitable)
+          : awaiter_(std::forward<Awaitable>(awaitable)), promise_(promise) {}
 
         bool await_ready() const noexcept {
             // NOLINTNEXTLINE(clang-analyzer-core.UndefinedBinaryOperatorResult)
@@ -479,19 +482,19 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
                 // to execute the more involved logic in hookAwaitSuspend().
                 return false;
             } else {
-                return awaitee_.await_ready();
+                return awaiter_.await_ready();
             }
         }
 
         CORRAL_NOINLINE auto await_suspend(Handle) {
             promise_->pc = reinterpret_cast<uintptr_t>(CORRAL_RETURN_ADDRESS());
-            return promise_->hookAwaitSuspend(awaitee_);
+            return promise_->hookAwaitSuspend(awaiter_);
         }
 
-        decltype(auto) await_resume() { return awaitee_.await_resume(); }
+        decltype(auto) await_resume() { return awaiter_.await_resume(); }
 
       private:
-        [[no_unique_address]] AwaitableAdapter<T, AwaitableType> awaitee_;
+        [[no_unique_address]] SanitizedAwaiter<Awaitable, AwaiterType> awaiter_;
         BasePromise* promise_;
     };
 
@@ -503,12 +506,13 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
 
     static auto final_suspend() noexcept { return FinalSuspendProxy(); }
 
-    template <class Awaitee> auto await_transform(Awaitee&& awaitee) noexcept {
+    template <class Awaitable>
+    auto await_transform(Awaitable&& awaitable) noexcept {
         static_assert(
-                !std::is_same_v<std::decay_t<Awaitee>, FinalSuspendProxy>);
-        // Note: intentionally not constraining Awaitee here to get a nicer
-        // compilation error (constraint will be checked in getAwaitable()).
-        return AwaitProxy<Awaitee>(this, std::forward<Awaitee>(awaitee));
+                !std::is_same_v<std::decay_t<Awaitable>, FinalSuspendProxy>);
+        // Note: intentionally not constraining Awaitable here to get a nicer
+        // compilation error (constraint will be checked in getAwaiter()).
+        return AwaitProxy<Awaitable>(this, std::forward<Awaitable>(awaitable));
     }
 
     friend RethrowCurrentException;

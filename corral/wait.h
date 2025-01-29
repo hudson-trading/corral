@@ -51,7 +51,7 @@ namespace corral {
 template <Awaitable... Ts> Awaitable auto anyOf(Ts&&... awaitables) {
     static_assert(
             sizeof...(Ts) == 0 ||
-                    (detail::Cancellable<detail::AwaitableType<Ts>> || ...),
+                    (detail::Cancellable<detail::AwaiterType<Ts>> || ...),
             "anyOf() makes no sense if all awaitables are non-cancellable");
 
     return makeAwaitable<detail::AnyOf<Ts...>>(std::forward<Ts>(awaitables)...);
@@ -153,7 +153,8 @@ auto try_(TryBlock&& tryBlock) {
 /// exception) will not work (it will std::terminate the process instead).
 ///
 /// Use `co_await corral::rethrow;` to re-throw the current exception instead.
-static constexpr const detail::RethrowCurrentException rethrow;
+static constexpr const detail::CoAwaitFactory<detail::RethrowCurrentException>
+        rethrow;
 
 /// A placeholder type for catch-all clauses in try-blocks
 /// (as `catch_([&](...) -> Task<>` is not allowed in C++).

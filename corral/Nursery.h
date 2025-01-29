@@ -102,8 +102,8 @@ template <class Ret = void> class TaskStarted;
 /// reference/pointer to the nursery outside the lifetime of some
 /// specific task in the nursery.
 class Nursery : private detail::TaskParent<void> {
-    template <class Ret> class StartAwaitableBase;
-    template <class Ret, class Callable, class... Args> class StartAwaitable;
+    template <class Ret> class StartAwaiterBase;
+    template <class Ret, class Callable, class... Args> class StartAwaiter;
     template <class Ret> friend class TaskStarted;
     friend Task<void> openNursery(Nursery*&, TaskStarted<>);
 
@@ -150,8 +150,8 @@ class Nursery : private detail::TaskParent<void> {
     template <class Callable> class Scope;
 
   protected:
-    template <class NurseryT> class Awaitable;
-    template <class Derived> class ParentAwaitable;
+    template <class NurseryT> class JoinAwaiter;
+    template <class Derived> class ParentAwaiter;
 
     Nursery() = default;
     Nursery(Nursery&&) = default;
@@ -182,7 +182,7 @@ class Nursery : private detail::TaskParent<void> {
     void adopt(detail::BasePromise* promise);
 
     template <class Ret>
-    static TaskStarted<Ret> makeTaskStarted(StartAwaitableBase<Ret>* parent) {
+    static TaskStarted<Ret> makeTaskStarted(StartAwaiterBase<Ret>* parent) {
         return TaskStarted<Ret>(parent);
     }
 
@@ -227,7 +227,9 @@ class Nursery : private detail::TaskParent<void> {
 /// Usage of this class is generally discouraged because it requires
 /// a deep understanding of the nature of any tasks spawned directly or
 /// indirectly into this nursery.
-class UnsafeNursery final : public Nursery, private Executor {
+class UnsafeNursery final : public Nursery,
+                            private Executor,
+                            private detail::Noncopyable {
   public:
     template <class EventLoopT>
     explicit UnsafeNursery(EventLoopT&& eventLoop)
@@ -236,11 +238,6 @@ class UnsafeNursery final : public Nursery, private Executor {
                  Executor::Capacity::Small) {
         executor_ = this;
     }
-
-    UnsafeNursery(const UnsafeNursery&) = delete;
-    UnsafeNursery(UnsafeNursery&&) = delete;
-    UnsafeNursery& operator=(const UnsafeNursery&) = delete;
-    UnsafeNursery& operator=(UnsafeNursery&&) = delete;
 
     // This is in UnsafeNursery because a regular nursery is never
     // observably empty (it will resume its parent, thus destroying
@@ -326,7 +323,7 @@ class UnsafeNursery final : public Nursery, private Executor {
 template <class Ret> class TaskStarted {
     using ResultType = Ret;
 
-    explicit TaskStarted(Nursery::StartAwaitableBase<Ret>* parent)
+    explicit TaskStarted(Nursery::StartAwaiterBase<Ret>* parent)
       : parent_(parent) {}
     friend Nursery;
 
@@ -350,7 +347,7 @@ template <class Ret> class TaskStarted {
     explicit(false) TaskStarted(detail::TaskStartedTag); // not defined
 
   protected:
-    Nursery::StartAwaitableBase<Ret>* parent_ = nullptr;
+    Nursery::StartAwaiterBase<Ret>* parent_ = nullptr;
 };
 
 
@@ -374,21 +371,21 @@ Task<void> openNursery(Nursery*& ptr, TaskStarted<> started = {});
 // Implementation
 
 //
-// Nursery::StartAwaitable
+// Nursery::StartAwaiter
 //
 
 template <class Ret>
-class Nursery::StartAwaitableBase : protected TaskParent<void> {
+class Nursery::StartAwaiterBase : protected TaskParent<void>,
+                                  private detail::Noncopyable {
     friend TaskStarted<Ret>;
 
   public:
-    explicit StartAwaitableBase(Nursery* nursery) : nursery_(nursery) {}
+    explicit StartAwaiterBase(Nursery* nursery) : nursery_(nursery) {}
 
-    StartAwaitableBase(StartAwaitableBase&& rhs)
+    StartAwaiterBase(StartAwaiterBase&& rhs)
       : nursery_(std::exchange(rhs.nursery_, nullptr)) {
         CORRAL_ASSERT((handle_ == noopHandle()) && !promise_);
     }
-    StartAwaitableBase& operator=(StartAwaitableBase&&) = delete;
 
   private:
     void storeSuccess() override {
@@ -418,7 +415,7 @@ class Nursery::StartAwaitableBase : protected TaskParent<void> {
             // TaskStarted<> was invoked before promise construction,
             // so there's nothing to hand off to the nursery yet.
             //
-            // StartAwaitable::await_suspend() will take care of submitting
+            // StartAwaiter::await_suspend() will take care of submitting
             // the promise properly when it becomes available.
         }
     }
@@ -432,12 +429,12 @@ class Nursery::StartAwaitableBase : protected TaskParent<void> {
 };
 
 template <class Ret, class Callable, class... Args>
-class Nursery::StartAwaitable : public StartAwaitableBase<Ret> {
+class Nursery::StartAwaiter : public StartAwaiterBase<Ret> {
     friend Nursery;
 
   public:
-    StartAwaitable(StartAwaitable&&) = default;
-    StartAwaitable& operator=(StartAwaitable&&) = delete;
+    StartAwaiter(StartAwaiter&&) = default;
+    StartAwaiter& operator=(StartAwaiter&&) = delete;
 
     bool await_early_cancel() noexcept { return false; }
     bool await_ready() const noexcept { return false; }
@@ -480,14 +477,14 @@ class Nursery::StartAwaitable : public StartAwaitableBase<Ret> {
         return !this->result_.wasCancelled();
     }
 
-    ~StartAwaitable() {
+    ~StartAwaiter() {
         if (this->nursery_) {
             std::apply(
                     [this](auto&&... args) {
                         this->nursery_->start(
                                 std::move(callable_), std::move(args)...,
                                 makeTaskStarted(
-                                        static_cast<StartAwaitableBase<Ret>*>(
+                                        static_cast<StartAwaiterBase<Ret>*>(
                                                 nullptr)));
                     },
                     std::move(args_));
@@ -495,8 +492,8 @@ class Nursery::StartAwaitable : public StartAwaitableBase<Ret> {
     }
 
   private:
-    StartAwaitable(Nursery* nursery, Callable&& callable, Args&&... args)
-      : StartAwaitableBase<Ret>(nursery),
+    StartAwaiter(Nursery* nursery, Callable&& callable, Args&&... args)
+      : StartAwaiterBase<Ret>(nursery),
         callable_(std::forward<Callable>(callable)),
         args_(std::forward<Args>(args)...) {}
 
@@ -628,11 +625,11 @@ Awaitable auto Nursery::start(Callable callable, Args... args) {
         using Sig = detail::CallableSignature<Callable>;
         using TaskStartedArg = typename Sig::template Arg<Sig::Arity - 1>;
         using ResultType = typename TaskStartedArg::ResultType;
-        return StartAwaitable<ResultType, Callable, Args...>(
+        return StartAwaiter<ResultType, Callable, Args...>(
                 this, std::move(callable), std::move(args)...);
     } else {
-        return StartAwaitable<Ret, Callable, Args...>(this, std::move(callable),
-                                                      std::move(args)...);
+        return StartAwaiter<Ret, Callable, Args...>(this, std::move(callable),
+                                                    std::move(args)...);
     }
 }
 
@@ -733,7 +730,7 @@ inline void Nursery::introspect(detail::TaskTreeCollector& c,
 // Logic for binding the nursery parent to the nursery
 //
 
-template <class Derived> class Nursery::ParentAwaitable {
+template <class Derived> class Nursery::ParentAwaiter {
     Derived& self() { return static_cast<Derived&>(*this); }
     const Derived& self() const { return static_cast<const Derived&>(*this); }
 
@@ -756,17 +753,17 @@ template <class Derived> class Nursery::ParentAwaitable {
 };
 
 template <class NurseryT>
-class Nursery::Awaitable
-  : public Nursery::ParentAwaitable<Awaitable<NurseryT>> {
-    friend ParentAwaitable<Awaitable<NurseryT>>;
+class Nursery::JoinAwaiter
+  : public Nursery::ParentAwaiter<JoinAwaiter<NurseryT>> {
+    friend ParentAwaiter<JoinAwaiter<NurseryT>>;
     friend NurseryT;
 
     NurseryT& nursery_;
 
-    explicit Awaitable(NurseryT& nursery) : nursery_(nursery) {}
+    explicit JoinAwaiter(NurseryT& nursery) : nursery_(nursery) {}
 
   public:
-    ~Awaitable()
+    ~JoinAwaiter()
         requires(std::derived_from<NurseryT, Nursery>)
     = default;
 
@@ -787,7 +784,7 @@ class Nursery::Awaitable
 };
 
 inline corral::Awaitable<void> auto UnsafeNursery::join() {
-    return Awaitable(*this);
+    return JoinAwaiter(*this);
 }
 
 //
@@ -796,7 +793,7 @@ inline corral::Awaitable<void> auto UnsafeNursery::join() {
 
 template <class Callable>
 class Nursery::Scope : public detail::NurseryScopeBase,
-                       public Nursery::ParentAwaitable<Scope<Callable>>,
+                       public Nursery::ParentAwaiter<Scope<Callable>>,
                        private detail::TaskParent<detail::NurseryBodyRetval> {
     class Impl : public Nursery {
       public:
@@ -835,7 +832,7 @@ class Nursery::Scope : public detail::NurseryScopeBase,
     }
 
   private:
-    friend Nursery::ParentAwaitable<Scope>; // so it can access nursery_
+    friend Nursery::ParentAwaiter<Scope>; // so it can access nursery_
     [[no_unique_address]] Callable callable_;
     Impl nursery_;
 };
@@ -850,7 +847,7 @@ struct Nursery::Factory {
 namespace detail {
 class BackreferencedNursery final : public Nursery {
     friend Task<void> corral::openNursery(Nursery*&, TaskStarted<>);
-    friend Nursery::Awaitable<BackreferencedNursery>;
+    friend Nursery::JoinAwaiter<BackreferencedNursery>;
 
   private /*methods*/:
     BackreferencedNursery(Executor* executor, Nursery*& backref)
@@ -866,7 +863,7 @@ class BackreferencedNursery final : public Nursery {
         return Nursery::continuation(p);
     }
 
-    corral::Awaitable<void> auto join() { return Awaitable(*this); }
+    corral::Awaitable<void> auto join() { return JoinAwaiter(*this); }
 
     void await_introspect(detail::TaskTreeCollector& c) const noexcept {
         introspect(c, "Nursery");
