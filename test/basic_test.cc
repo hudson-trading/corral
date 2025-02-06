@@ -1663,6 +1663,24 @@ CORRAL_TEST_CASE("unsafe-nursery-async-close") {
     CATCH_CHECK(!n);
 }
 
+CORRAL_TEST_CASE("unsafe-nursery-sync-close") {
+    auto n = std::make_unique<UnsafeNursery>(t);
+    Event evt;
+    bool done = false;
+    n->start([&]() -> Task<> {
+        co_await evt;
+        done = true;
+    });
+    co_await t.sleep(1ms);
+    CATCH_CHECK(!n->empty());
+    CATCH_CHECK(!done);
+    evt.trigger();
+    CATCH_CHECK(!n->empty());
+    CATCH_CHECK(!done);
+    n.reset();
+    CATCH_CHECK(done);
+}
+
 CORRAL_TEST_CASE("run-on-cancel") {
     co_await anyOf(t.sleep(2ms), untilCancelledAnd(t.sleep(1ms)));
     CATCH_CHECK(t.now() == 3ms);

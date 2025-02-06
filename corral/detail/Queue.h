@@ -114,6 +114,15 @@ class Queue {
         ++size_;
     }
 
+    template <std::invocable<T&> Fn> void foreach(Fn&& fn) {
+        for (T& elem : first_range()) {
+            std::forward<Fn>(fn)(elem);
+        }
+        for (T& elem : second_range()) {
+            std::forward<Fn>(fn)(elem);
+        }
+    }
+
   private:
     std::span<T> first_range() {
         if (empty()) {
