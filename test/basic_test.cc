@@ -1304,7 +1304,7 @@ CORRAL_TEST_CASE("nursery-task-started") {
                         started();
                     }),
                     t.sleep(2ms));
-            CATCH_CHECK(done);
+            CATCH_CHECK(!done);
             CATCH_CHECK(t.now() == 5ms);
             co_return join;
         };
@@ -1357,6 +1357,68 @@ CORRAL_TEST_CASE("nursery-task-started") {
             });
             co_return join;
         };
+    }
+
+    CATCH_SECTION("cancel-before-handoff") {
+        // If TaskStarted<> is invoked in a cancelled context, handing
+        // off a coroutine pending cancellation to a cancelled nursery,
+        // this should not result in double cancellation.
+        co_await anyOf(t.sleep(1ms), [&]() -> Task<> {
+            CORRAL_WITH_NURSERY(n) {
+                co_await n.start([&](TaskStarted<> started) -> Task<> {
+                    co_await t.sleep(5ms, noncancellable);
+                    started();
+
+                    co_await t.sleep(1ms, noncancellable);
+
+                    // The cancellation should happen, though
+                    co_await yield;
+                    CATCH_CHECK(!"should never reach here");
+                });
+
+                // The task in the middle of its cancellation should not
+                // be reparented, and the above `n.start()` should not
+                // complete early.
+                CATCH_CHECK(!"should never reach here");
+
+                co_return join;
+            };
+        });
+    }
+
+    CATCH_SECTION("cancel-before-handoff-2") {
+        // Cancelling `n.start()` before handoff and *then* cancelling
+        // the nursery should not result in double cancellation either.
+        CORRAL_WITH_NURSERY(n) {
+            co_await anyOf(t.sleep(1ms),
+                           n.start([&](TaskStarted<> started) -> Task<> {
+                               co_await t.sleep(2ms, noncancellable);
+                               started();
+                               co_await t.sleep(2ms, noncancellable);
+                           }));
+            co_return cancel;
+        };
+    }
+
+    CATCH_SECTION("early-cancel") {
+        // `co_await n.start()` in cancelled context should still start
+        // the child coroutine, pending cancellation.
+        bool started = false;
+        co_await anyOf(t.sleep(1ms), [&]() -> Task<> {
+            CORRAL_WITH_NURSERY(n) {
+                co_await t.sleep(2ms, noncancellable); // now we have pending
+                                                       // cancellation
+                co_await n.start([&](TaskStarted<>) -> Task<> {
+                    started = true;
+                    co_await yield;
+                    CATCH_CHECK(!"should never reach here");
+                });
+
+                CATCH_CHECK(!"should never reach here"); // see above
+                co_return join;
+            };
+        });
+        CATCH_CHECK(started);
     }
 }
 

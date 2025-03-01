@@ -32,6 +32,7 @@
 #include "Task.h"
 #include "detail/IntrusiveList.h"
 #include "detail/ParkingLot.h"
+#include "detail/PointerBits.h"
 #include "detail/Promise.h"
 #include "utility.h"
 
@@ -380,17 +381,23 @@ class Nursery::StartAwaiterBase : protected TaskParent<void>,
                                   private detail::Noncopyable {
     friend TaskStarted<Ret>;
 
+    enum Flags { Cancelling = 1 };
+
   public:
     explicit StartAwaiterBase(Nursery* nursery) : nursery_(nursery) {}
-
     StartAwaiterBase(StartAwaiterBase&& rhs)
       : nursery_(std::exchange(rhs.nursery_, nullptr)) {
         CORRAL_ASSERT((handle_ == noopHandle()) && !promise_);
     }
 
+  protected:
+    bool isCancelling() const { return executor_.bits() & Cancelling; }
+    void setCancelling() { executor_.setBits(Cancelling); }
+
   private:
     void storeSuccess() override {
-        CORRAL_ASSERT(!"Nursery task completed without signalling readiness");
+        CORRAL_ASSERT(isCancelling() &&
+                      "Nursery task completed without signalling readiness");
     }
     void storeException() override { result_.storeException(); }
     void cancelled() override { result_.markCancelled(); }
@@ -404,6 +411,10 @@ class Nursery::StartAwaiterBase : protected TaskParent<void>,
     }
 
     void handOff() {
+        if (isCancelling()) {
+            return;
+        }
+
         detail::Promise<void>* p = promise_.release();
         if (p) {
             p->setExecutor(nursery_->executor());
@@ -421,12 +432,13 @@ class Nursery::StartAwaiterBase : protected TaskParent<void>,
         }
     }
 
+
   protected:
     Nursery* nursery_;
     detail::Result<Ret> result_;
     Handle handle_ = noopHandle();
     detail::PromisePtr<void> promise_;
-    Executor* executor_ = nullptr;
+    detail::PointerBits<Executor, Flags, 1> executor_;
 };
 
 template <class Ret, class Callable, class... Args>
@@ -437,10 +449,16 @@ class Nursery::StartAwaiter : public StartAwaiterBase<Ret> {
     StartAwaiter(StartAwaiter&&) = default;
     StartAwaiter& operator=(StartAwaiter&&) = delete;
 
-    bool await_early_cancel() noexcept { return false; }
+    bool await_early_cancel() noexcept {
+        this->setCancelling();
+        return false;
+    }
+
     bool await_ready() const noexcept { return false; }
 
-    void await_set_executor(Executor* ex) noexcept { this->executor_ = ex; }
+    void await_set_executor(Executor* ex) noexcept {
+        this->executor_.setPtr(ex);
+    }
 
     Handle await_suspend(Handle h) {
         CORRAL_TRACE("    ...Nursery::start() %p", this);
@@ -461,7 +479,10 @@ class Nursery::StartAwaiter : public StartAwaiterBase<Ret> {
         } else {
             ++this->nursery_->pendingTaskCount_;
             this->handle_ = h;
-            promise->setExecutor(this->executor_);
+            promise->setExecutor(this->executor_.ptr());
+            if (this->isCancelling()) {
+                promise->cancel();
+            }
             this->promise_ = std::move(promise);
             return this->promise_->start(this, h);
         }
@@ -470,13 +491,12 @@ class Nursery::StartAwaiter : public StartAwaiterBase<Ret> {
     Ret await_resume() && { return std::move(this->result_).value(); }
     bool await_cancel(Handle) noexcept {
         if (this->promise_) {
+            this->setCancelling();
             this->promise_->cancel();
         }
         return false;
     }
-    auto await_must_resume() const noexcept {
-        return !this->result_.wasCancelled();
-    }
+    auto await_must_resume() const noexcept { return std::false_type{}; }
 
     ~StartAwaiter() {
         if (this->nursery_) {

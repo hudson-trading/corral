@@ -145,7 +145,7 @@ A scope in which a dynamic number of child tasks can run.
   of the spawner: any exceptions raised by the child get reraised as
   the result of `start()`, and cancellation of the spawner is proxied
   to the child task. Upon the invocation of the `TaskStarted` object
-  the task is reparented to the nursery.
+  the task is reparented to the nursery, unless the task is being cancelled.
   If the task accepts a `TaskStarted<T>` for a non-void type T, its
   invocation requires a value of that type, which will become the result
   of the `co_await start(...)` expression in the spawner. If this

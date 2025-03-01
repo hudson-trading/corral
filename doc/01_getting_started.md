@@ -316,7 +316,7 @@ with default arguments.
 A task submitted into a nursery may also communicate a value back
 to its spawner, which becomes the result of the `co_await n.start()` expression:
 
-```
+```cpp
 CORRAL_WITH_NURSERY(n) {
     int v = co_await n.start([&](corral::TaskStarted<int> started) -> corral::Task {
         started(42);
@@ -325,6 +325,29 @@ CORRAL_WITH_NURSERY(n) {
     assert(v == 42);
 };
 ```
+
+If the call to `start()` is cancelled before the child signals its readiness,
+cancellation is propagated down to the child, and `start()` waits for the
+child to exit (either due to cancellation or otherwise). Invocation of `TaskStarted`
+in cancelled context is a no-op; such a task is *not* reparented to the nursery,
+and the value passed to `TaskStarted` (if any) is destroyed. If the value cannot
+be discarded safely by calling its destructor, then you should pass it in a different
+way, such as an external variable captured by reference in the child:
+
+```cpp
+MyObject obj;
+CORRAL_WITH_NURSERY(n) {
+    co_await n.start([&](corral::TaskStarted<> started) -> corral::Task<> {
+        obj = makeObj();
+        started();
+        // ...work...
+    });
+    // ...use obj...
+};
+```
+
+Due to structured concurrency invariants (see below), `obj` in this example
+is guaranteed to remain in scope unitl `started` is invoked in the child task.
 
 ## The task tree
 

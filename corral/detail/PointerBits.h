@@ -80,6 +80,13 @@ class PointerBitsImpl<T, Bits, Width, false> {
 };
 
 template <class T, class Bits, int Width, int Align = alignof(T)>
-using PointerBits = PointerBitsImpl<T, Bits, Width, (Align >= (1 << Width))>;
+class PointerBits
+  : public PointerBitsImpl<T, Bits, Width, (Align >= (1 << Width))> {
+  public:
+    using PointerBits::PointerBitsImpl::PointerBitsImpl;
+
+    void setPtr(T* ptr) { this->set(ptr, this->bits()); }
+    void setBits(Bits bits) { this->set(this->ptr(), bits); }
+};
 
 } // namespace corral::detail
