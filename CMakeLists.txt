@@ -62,7 +62,7 @@ if("${CORRAL_CATCH2}" MATCHES ".*://.*")
     )
     FetchContent_MakeAvailable(catch)
 else()
-    set(Catch_INCLUDE_DIR "${CORRAL2_CATCH}")
+    set(Catch_INCLUDE_DIR "${CORRAL_CATCH2}")
     find_package(Catch2 2.13.9 REQUIRED)
 endif()
 
