@@ -2736,4 +2736,34 @@ CORRAL_TEST_CASE("combiners-custom-error-policy") {
     }
 }
 
+CORRAL_TEST_CASE("co_try") {
+    auto makeValue = [](int x) -> MyResult<int> {
+        if (x < 0) {
+            return MyError{EINVAL};
+        }
+        return x;
+    };
+
+    auto body = [&](int x) -> Task<MyResult<std::string>> {
+        int rx = CORRAL_CO_TRY makeValue(x);
+        co_return std::to_string(rx);
+    };
+
+    MyResult<std::string> res = co_await body(42);
+    CATCH_CHECK(res == std::string("42"));
+    res = co_await body(-1);
+    CATCH_CHECK(res == MyError{EINVAL});
+
+    auto voidBody = [&](auto func) -> Task<MyResult<void>> {
+        CORRAL_CO_TRY func();
+        co_return OK;
+    };
+    MyResult<void> vres =
+            co_await voidBody([]() -> MyResult<void> { return OK; });
+    CATCH_CHECK(vres);
+    vres = co_await voidBody(
+            []() -> MyResult<void> { return MyError{EINVAL}; });
+    CATCH_CHECK(vres == MyError{EINVAL});
+}
+
 } // namespace

@@ -26,6 +26,7 @@
 #pragma once
 #include <stddef.h>
 
+#include "../ErrorPolicy.h"
 #include "../Executor.h"
 #include "../config.h"
 #include "../defs.h"
@@ -43,6 +44,7 @@ class BasePromise;
 template <class T> class Promise;
 class NurseryScopeBase {};
 class RethrowCurrentException;
+template <class T> class CoTry;
 
 /// An object that can serve as the parent of a task. It receives the task's
 /// result (value, exception, or cancellation) and can indicate where
@@ -506,6 +508,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     }
 
     friend RethrowCurrentException;
+    template <class> friend class CoTry;
 };
 
 template <class T> class Promise;
@@ -541,6 +544,12 @@ class Promise : public BasePromise, public ReturnValueMixin<T> {
     /// (`co_await` binds too tightly.)
     template <std::derived_from<NurseryScopeBase> U> auto yield_value(U&& u) {
         return await_transform(std::forward<U>(u));
+    }
+
+    template <class U>
+        requires HaveCompatibleErrorPolicies<T, U>
+    CoTry<U> yield_value(CoTry<U> coTry) {
+        return std::move(coTry);
     }
 
   private:
@@ -592,5 +601,34 @@ struct DestroyPromise {
 
 template <class T>
 using PromisePtr = std::unique_ptr<Promise<T>, DestroyPromise>;
+
+
+template <class T> class CoTry {
+    using Policy = DetectErrorPolicy<T>;
+
+  public:
+    explicit CoTry(T&& value) : value_(std::forward<T>(value)) {}
+
+    bool await_ready() const noexcept {
+        return !Policy::hasError(Policy::unwrapError(value_));
+    }
+
+    template <class ReturnType>
+        requires(HaveCompatibleErrorPolicies<ReturnType, T>)
+    Handle await_suspend(CoroutineHandle<Promise<ReturnType>> h) noexcept {
+        auto err = Policy::unwrapError(value_);
+        CORRAL_ASSERT(Policy::hasError(err));
+        Promise<ReturnType>& promise = h.promise();
+        promise.return_value(Policy::wrapError(std::move(err)));
+        return promise.hookFinalSuspend();
+    }
+
+    decltype(auto) await_resume() {
+        return Policy::template unwrapValue<T>(std::forward<T>(value_));
+    }
+
+  private:
+    T value_;
+};
 
 } // namespace corral::detail

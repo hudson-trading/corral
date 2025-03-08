@@ -283,5 +283,34 @@ static constexpr const bool PolicyUsesErrorCodes =
         !std::is_same_v<PolicyReturnTypeFor<Policy, void>, void>;
 
 
+template <class> class CoTry;
+struct CoTryFactory {
+    template <class T> auto operator|(T&& t) {
+        return CoTry<T>(std::forward<T>(t));
+    }
+};
+
+/// A helper macro to simplify error propagation (but keep it visible)
+/// in contexts where C++ exceptions are unavailable or disallowed.
+/// If called in coroutine context whose return type has an error
+/// handling policy matching that of the argument, any error indicated
+/// by the argument to CORRAL_CO_TRY will stop the coroutine early
+/// and be propagated to the caller:
+///
+///     std::expected<int, MyError> foo();
+///     corral::Task<std::expected<std::string, MyError>> bar() {
+///         int i = co_try foo();
+///         co_return std::to_string(i);
+///     }
+///
+/// It may be beneficial to re#define this macro to a shorter name
+/// (like `#define co_try CORRAL_CO_TRY`) in code bases where other
+/// definition of `co_try` is not employed.
+///
+/// Note that the argument to the macro is a value, not an awaitable.
+/// `co_try co_await someAwaitable()` chain may need to be used.
+#define CORRAL_CO_TRY co_yield ::corral::detail::CoTryFactory{} |
+
+
 } // namespace detail
 } // namespace corral
