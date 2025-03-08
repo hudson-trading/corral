@@ -248,6 +248,11 @@ struct MyErrorPolicy {
 static_assert(corral::ApplicableErrorPolicy<MyErrorPolicy, MyResult<void>>);
 static_assert(corral::ApplicableErrorPolicy<MyErrorPolicy, MyResult<int>>);
 
+using MyNursery = BasicNursery<MyErrorPolicy>;
+#define WITH_MY_NURSERY(argname)                                               \
+    CORRAL_WITH_BASIC_NURSERY(MyErrorPolicy, argname)
+
+
 namespace corral {
 template <class T> struct UseErrorPolicy<MyResult<T>> {
     using Type = MyErrorPolicy;
@@ -2646,6 +2651,101 @@ CORRAL_TEST_CASE("sequence") {
         CATCH_CHECK(r == 42);
         r = co_await (noop() | then([] { return RValueQualified{}; }));
         CATCH_CHECK(r == 42);
+    }
+}
+
+CORRAL_TEST_CASE("nursery-custom-error-policy") {
+    CATCH_SECTION("basic") {
+        // Smoke test: Task<MyResult<>> can be submitted into the nursery.
+        MyResult<> ret = WITH_MY_NURSERY(n) {
+            n.start([]() -> Task<MyResult<>> { co_return OK; });
+            // Infallible tasks can also be submitted into a nursery
+            // with non-default error policy.
+            n.start([]() -> Task<void> { co_return; });
+            co_return join;
+        };
+        CATCH_CHECK(ret);
+    }
+
+    CATCH_SECTION("errors") {
+        // If the task exits with an error according to the used policy,
+        // sibling tasks get cancelled, and the error is propagated
+        // further up.
+        MyResult<> ret = WITH_MY_NURSERY(n) {
+            n.start([&]() -> Task<MyResult<>> {
+                co_await t.sleep(2ms);
+                co_return MyError{EINVAL};
+            });
+            n.start([&]() -> Task<MyResult<>> {
+                co_await t.sleep(5ms);
+                co_return OK;
+            });
+            co_return join;
+        };
+        CATCH_CHECK(ret == MyError{EINVAL});
+        CATCH_CHECK(t.now() == 2ms);
+    }
+
+    CATCH_SECTION("open-nursery") {
+        // openNursery() works in similar fashion.
+        MyNursery* n;
+        WITH_MY_NURSERY(n2) {
+            co_await n2.start([&](TaskStarted<> started) -> Task<MyResult<>> {
+                MyResult<> nret = co_await openNursery(n, std::move(started));
+                CATCH_CHECK(nret == MyError{EPROTO});
+                co_return OK;
+            });
+
+            n->start([]() -> Task<MyResult<>> { co_return MyError{EPROTO}; });
+            co_return join;
+        };
+    }
+
+    CATCH_SECTION("fail-early") {
+        // If the task taking TaskStarted<> exits with an error
+        // before invoking `started()`, the error is propagated up
+        // from `BasicNursery::start()`.
+        MyResult<> ret = WITH_MY_NURSERY(n) {
+            MyResult<> st = co_await n.start(
+                    [&](TaskStarted<> started) -> Task<MyResult<>> {
+                        co_await t.sleep(1ms);
+                        co_return MyError{EPROTO};
+                    });
+
+            CATCH_CHECK(t.now() == 1ms);
+            CATCH_CHECK(st == MyError{EPROTO});
+            co_return join;
+        };
+        CATCH_CHECK(ret);
+    }
+
+    CATCH_SECTION("fail-late") {
+        // If the task fails after invoking `started()`, the error
+        // is propagated up to the nursery parent.
+        MyResult<> ret = WITH_MY_NURSERY(n) {
+            MyResult<> st = co_await n.start(
+                    [&](TaskStarted<> started) -> Task<MyResult<>> {
+                        co_await t.sleep(1ms);
+                        started();
+                        co_await t.sleep(1ms);
+                        co_return MyError{EPROTO};
+                    });
+
+            CATCH_CHECK(t.now() == 1ms);
+            CATCH_CHECK(st);
+            co_return join;
+        };
+        CATCH_CHECK(t.now() == 2ms);
+        CATCH_CHECK(ret == MyError{EPROTO});
+    }
+
+    CATCH_SECTION("fail-body") {
+        MyResult<> ret = WITH_MY_NURSERY(n) {
+            co_await t.sleep(1ms);
+            co_return MyError{EPROTO};
+        };
+        CATCH_CHECK(t.now() == 1ms);
+        CATCH_CHECK(ret == MyError{EPROTO});
     }
 }
 

@@ -24,12 +24,17 @@
 // SPDX-License-Identifier: MIT
 
 #pragma once
+#include "ErrorPolicy.h"
 #include "detail/Promise.h"
 #include "detail/TaskAwaiter.h"
 #include "utility.h"
 
 namespace corral {
-class Nursery;
+
+namespace detail {
+class NurseryBase;
+}
+template <class PolicyT> class BasicNursery;
 
 
 /// An async task backed by a C++20 coroutine.
@@ -59,8 +64,10 @@ template <class T = void> class [[nodiscard]] Task : public detail::TaskTag {
   private:
     detail::PromisePtr<T> promise_;
 
-    friend class Nursery;
+    friend detail::NurseryBase;
     template <class, class, class...> friend class detail::TryBlock;
+
+    template <class PolicyT> friend class BasicNursery;
 };
 
 namespace detail {

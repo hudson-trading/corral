@@ -28,6 +28,7 @@
 #include <variant>
 #include <vector>
 
+#include "ErrorPolicy.h"
 #include "Executor.h"
 #include "Task.h"
 #include "detail/IntrusiveList.h"
@@ -38,6 +39,8 @@
 
 namespace corral {
 
+template <class Ret = void> class TaskStarted;
+
 namespace detail {
 class TagCtor {};
 struct JoinTag {
@@ -46,19 +49,63 @@ struct JoinTag {
 struct CancelTag {
     explicit constexpr CancelTag(TagCtor) {}
 };
-using NurseryBodyRetval = std::variant<JoinTag, CancelTag>;
+
+template <class Policy>
+using NurseryBodyRetval = std::conditional_t<
+        PolicyUsesErrorCodes<Policy>,
+        std::variant<typename Policy::ErrorType, JoinTag, CancelTag>,
+        std::variant<JoinTag, CancelTag>>;
 
 class TaskStartedTag {
     explicit constexpr TaskStartedTag(TagCtor) {}
 };
 
-}; // namespace detail
+template <class NurseryT> class NurseryJoinAwaiter;
+template <class Derived, class Policy> class NurseryParentAwaiter;
+template <class Ret> class TaskStartedSink;
+template <class Poilicy, class Ret, class Callable, class... Args>
+class NurseryStartAwaiter;
+
+// A portion of `BasicNursery` invariant of used error policy.
+class NurseryBase : private Noncopyable {
+    template <class Ret> friend class TaskStarted;
+
+  public:
+    ~NurseryBase() { CORRAL_ASSERT(tasks_.empty()); }
+
+  protected /*methods*/:
+    Executor* executor() const noexcept { return executor_.ptr(); }
+    bool cancelling() const noexcept { return executor_.bits() & Cancelling; }
+    void doCancel();
+    void cancel();
+    void adopt(detail::BasePromise* promise);
+
+    template <class Ret>
+    Handle addPromise(detail::Promise<Ret>* p, TaskParent<Ret>* parent);
+
+    template <class Ret>
+    Handle addTask(Task<Ret> task, TaskParent<Ret>* parent) {
+        return addPromise(task.release(), parent);
+    }
+
+  protected /*fields*/:
+    static constexpr const size_t Cancelling = 1;
+
+    detail::PointerBits<Executor, size_t, 1> executor_{nullptr, 0};
+    detail::IntrusiveList<detail::BasePromise> tasks_;
+    unsigned taskCount_ = 0;
+    unsigned pendingTaskCount_ = 0;
+    Handle parent_ = nullptr;
+
+    template <class Ret> friend class detail::TaskStartedSink;
+};
+
+struct NurseryOpener;
+
+} // namespace detail
 
 static constexpr detail::JoinTag join{detail::TagCtor{}};
 static constexpr detail::CancelTag cancel{detail::TagCtor{}};
-
-template <class Ret = void> class TaskStarted;
-
 
 /// A nursery represents a scope for a set of tasks to live in.
 /// Execution cannot continue past the end of the nursery block until
@@ -73,10 +120,17 @@ template <class Ret = void> class TaskStarted;
 ///        co_return corral::join; // or corral::cancel, see below
 ///    };
 ///
-/// If any task exits with an unhandled exception, all other tasks in the
-/// nursery will be cancelled, and the exception will be rethrown once the
-/// tasks in the nursery have completed. If multiple tasks exit with
-/// unhandled exceptions, only the first exception will propagate.
+/// If any task exits with an error, all other tasks in the
+/// nursery will be cancelled, and the error will be propagated further up
+/// once the tasks in the nursery have completed. If multiple tasks exit with
+/// errors, only the first error will propagate.
+///
+/// For `Nursery`, "error" in the above discussion means a thrown exception.
+/// If you use a different convention for representing errors, such as
+/// `std::expected`, then use `CORRAL_WITH_BASIC_NURSERY(Policy, n)`,
+/// where `Policy` is an error policy class as described in `ErrorPolicy.h`.
+/// The resulting nursery type if a policy is specified will be
+/// `BasicNursery<Policy>`.
 ///
 /// The body of the nursery block is the first task that runs in the
 /// nursery. Be careful defining local variables within this block;
@@ -103,23 +157,37 @@ template <class Ret = void> class TaskStarted;
 /// nursery closure, you should be careful not to preserve a
 /// reference/pointer to the nursery outside the lifetime of some
 /// specific task in the nursery.
-class Nursery : private detail::TaskParent<void> {
-    template <class Ret> class StartAwaiterBase;
-    template <class Ret, class Callable, class... Args> class StartAwaiter;
-    template <class Ret> friend class TaskStarted;
-    friend Task<void> openNursery(Nursery*&, TaskStarted<>);
+template <class PolicyT>
+class BasicNursery
+  : public detail::NurseryBase,
+    private detail::TaskParent<detail::PolicyReturnTypeFor<PolicyT, void>> {
+    using NurseryBase = detail::NurseryBase;
+
+    template <class, class> friend class detail::NurseryParentAwaiter;
+    template <class> friend class detail::NurseryJoinAwaiter;
+    template <class, class, class, class...>
+    friend class detail::NurseryStartAwaiter;
+
+    friend detail::NurseryOpener;
+
+  protected:
+    using Policy = PolicyT;
+    using TaskReturnType = detail::PolicyReturnTypeFor<PolicyT, void>;
 
   public:
     struct Factory;
 
     /// A nursery construction macro.
-#define CORRAL_WITH_NURSERY(argname)                                           \
-    co_yield ::corral::Nursery::Factory{} % [&](::corral::Nursery & argname)   \
-            -> ::corral::Task<::corral::detail::NurseryBodyRetval>
+#define CORRAL_WITH_BASIC_NURSERY(PolicyT, argname)                            \
+    co_yield ::corral::BasicNursery<PolicyT>::Factory{} %                      \
+            [&](::corral::BasicNursery<PolicyT> & argname)                     \
+            -> ::corral::Task<::corral::detail::NurseryBodyRetval<PolicyT>>
 
-    ~Nursery() { CORRAL_ASSERT(tasks_.empty()); }
+    ~BasicNursery()
+        requires ApplicableErrorPolicy<PolicyT, TaskReturnType>
+    {}
 
-    unsigned taskCount() const noexcept { return taskCount_; }
+    unsigned taskCount() const noexcept { return this->taskCount_; }
 
     /// Starts a task in the nursery that runs
     /// `co_await std::invoke(c, args...)`.
@@ -143,62 +211,43 @@ class Nursery : private detail::TaskParent<void> {
     Awaitable auto start(Callable c, Args... args);
 
     /// Requests cancellation of all tasks.
-    void cancel();
+    void cancel() { NurseryBase::cancel(); }
 
     /// Returns the executor for this nursery. This may be nullptr if the
     /// nursery is closed (meaning no new tasks can be started in it).
-    Executor* executor() const noexcept { return executor_; }
+    Executor* executor() const noexcept { return NurseryBase::executor(); }
 
     template <class Callable> class Scope;
 
   protected:
-    template <class NurseryT> class JoinAwaiter;
-    template <class Derived> class ParentAwaiter;
-
-    Nursery() = default;
-    Nursery(Nursery&&) = default;
-
-    void doStart(detail::Promise<void>* p) { addPromise(p, this).resume(); }
-
-    void rethrowException();
-    static std::exception_ptr cancellationRequest();
-
-    template <class Ret>
-    Handle addPromise(detail::Promise<Ret>* p, TaskParent<Ret>* parent);
-
-    template <class Ret>
-    Handle addTask(Task<Ret> task, TaskParent<Ret>* parent) {
-        return addPromise(task.release(), parent);
+    void doStart(detail::Promise<TaskReturnType>* p) {
+        this->addPromise(p, this).resume();
     }
+
+    TaskReturnType wrapError();
 
     /// TaskParent implementation
     Handle continuation(detail::BasePromise* promise) noexcept override;
-    void storeValue(detail::Void) override {}
+    void storeError(typename Policy::ErrorType e) noexcept;
+    void storeValue(detail::InhabitedType<TaskReturnType> value) override;
     void storeException() override;
 
-    void doCancel();
-
     template <class Callable, class... Args>
-    detail::Promise<void>* makePromise(Callable c, Args... args);
-
-    void adopt(detail::BasePromise* promise);
-
-    template <class Ret>
-    static TaskStarted<Ret> makeTaskStarted(StartAwaiterBase<Ret>* parent) {
-        return TaskStarted<Ret>(parent);
-    }
+    detail::Promise<TaskReturnType>* makePromise(Callable c, Args... args);
 
     void introspect(detail::TaskTreeCollector& c,
                     const char* title) const noexcept;
 
   protected:
-    Executor* executor_ = nullptr;
-    detail::IntrusiveList<detail::BasePromise> tasks_;
-    unsigned taskCount_ = 0;
-    unsigned pendingTaskCount_ = 0;
-    Handle parent_ = nullptr;
-    std::exception_ptr exception_;
+    typename Policy::ErrorType error_{};
 };
+
+/// A nursery with the default error handling policy, which uses
+/// C++ exceptions for error propagation.
+using Nursery = BasicNursery<detail::DefaultErrorPolicy>;
+
+#define CORRAL_WITH_NURSERY(argname)                                           \
+    CORRAL_WITH_BASIC_NURSERY(::corral::detail::DefaultErrorPolicy, argname)
 
 
 /// A variant of a nursery which can be used when adding async
@@ -229,24 +278,25 @@ class Nursery : private detail::TaskParent<void> {
 /// Usage of this class is generally discouraged because it requires
 /// a deep understanding of the nature of any tasks spawned directly or
 /// indirectly into this nursery.
-class UnsafeNursery final : public Nursery,
-                            private Executor,
-                            private detail::Noncopyable {
+template <class Policy>
+class BasicUnsafeNursery final : public BasicNursery<Policy>, private Executor {
+    using TaskReturnType = typename BasicNursery<Policy>::TaskReturnType;
+
   public:
     template <class EventLoopT>
-    explicit UnsafeNursery(EventLoopT&& eventLoop)
+    explicit BasicUnsafeNursery(EventLoopT&& eventLoop)
       : Executor(std::forward<EventLoopT>(eventLoop),
                  *this,
                  Executor::Capacity::Small) {
-        executor_ = this;
+        this->executor_.set(this, 0);
     }
 
     // This is in UnsafeNursery because a regular nursery is never
     // observably empty (it will resume its parent, thus destroying
     // the nursery, as soon as it has no tasks left)
-    bool empty() const noexcept { return tasks_.empty(); }
+    bool empty() const noexcept { return this->tasks_.empty(); }
 
-    ~UnsafeNursery() { close(); }
+    ~BasicUnsafeNursery() { close(); }
 
     /// Perform the operation done by the destructor explicitly.
     /// Cancel any tasks still running, give them a chance to clean up
@@ -255,14 +305,14 @@ class UnsafeNursery final : public Nursery,
     /// the nursery is closed and any attempt to submit more tasks to it
     /// will produce undefined behavior.
     void close() {
-        if (!tasks_.empty()) {
+        if (!this->tasks_.empty()) {
             this->schedule(
-                    +[](UnsafeNursery* self) noexcept { self->cancel(); },
+                    +[](BasicUnsafeNursery* self) noexcept { self->cancel(); },
                     this);
         }
         this->Executor::drain();
         assertEmpty();
-        executor_ = nullptr;
+        this->executor_.setPtr(nullptr);
     }
 
     /// Asynchronously closes the nursery.
@@ -273,26 +323,26 @@ class UnsafeNursery final : public Nursery,
     /// Note that the continuation will be immediately executed
     /// (before asyncClose() returns) if the nursery is already empty.
     void asyncClose(std::invocable<> auto continuation) {
-        CORRAL_ASSERT(parent_ == nullptr &&
+        CORRAL_ASSERT(this->parent_ == nullptr &&
                       "nursery already joined or asyncClose()d");
-        if (tasks_.empty()) {
-            executor_ = nullptr;
+        if (this->tasks_.empty()) {
+            this->executor_.setPtr(nullptr);
             continuation();
         } else {
-            parent_ = asCoroutineHandle(
+            this->parent_ = asCoroutineHandle(
                     [this, c = std::move(continuation)]() noexcept {
-                        if (exception_ != cancellationRequest()) {
-                            // terminate() on any exception
-                            std::rethrow_exception(exception_);
+                        if (Policy::hasError(this->error_)) {
+                            Policy::terminateBy(this->error_);
+                            CORRAL_ASSERT_UNREACHABLE();
                         }
                         c();
                     });
-            cancel();
+            this->cancel();
         }
     }
 
     void assertEmpty() {
-        if (!tasks_.empty()) {
+        if (!this->tasks_.empty()) {
             CORRAL_FAIL_FOR_DANGLING_TASKS(
                     "UnsafeNursery destroyed with tasks still active", *this);
         }
@@ -305,13 +355,15 @@ class UnsafeNursery final : public Nursery,
     /// new parent to the nursery's children, etc. Once join() returns,
     /// the nursery is closed and any attempt to submit more tasks to it
     /// will produce undefined behavior.
-    corral::Awaitable<void> auto join();
+    corral::Awaitable<TaskReturnType> auto join();
 
     // Allow the nursery itself to be an introspection root for its executor
     void await_introspect(detail::TaskTreeCollector& c) const noexcept {
-        introspect(c, "UnsafeNursery");
+        this->introspect(c, "UnsafeNursery");
     }
 };
+
+using UnsafeNursery = BasicUnsafeNursery<detail::DefaultErrorPolicy>;
 
 
 /// A callable spawned into a nursery can take a `TaskStarted` argument
@@ -325,9 +377,12 @@ class UnsafeNursery final : public Nursery,
 template <class Ret> class TaskStarted {
     using ResultType = Ret;
 
-    explicit TaskStarted(Nursery::StartAwaiterBase<Ret>* parent)
+    explicit TaskStarted(detail::TaskStartedSink<Ret>* parent)
       : parent_(parent) {}
-    friend Nursery;
+
+    template <class Policy> friend class BasicNursery;
+    template <class, class, class, class...>
+    friend class detail::NurseryStartAwaiter;
 
   public:
     TaskStarted() = default;
@@ -349,9 +404,25 @@ template <class Ret> class TaskStarted {
     explicit(false) TaskStarted(detail::TaskStartedTag); // not defined
 
   protected:
-    Nursery::StartAwaiterBase<Ret>* parent_ = nullptr;
+    detail::TaskStartedSink<Ret>* parent_ = nullptr;
 };
 
+
+namespace detail {
+struct NurseryOpener {
+    explicit constexpr NurseryOpener(TagCtor) {}
+
+    template <class Policy>
+    Task<PolicyReturnTypeFor<Policy, void>> operator()(
+            BasicNursery<Policy>*& ptr, TaskStarted<> started = {}) const;
+
+    template <class Policy>
+    Task<PolicyReturnTypeFor<Policy, void>> operator()(
+            std::reference_wrapper<BasicNursery<Policy>*> ptr,
+            TaskStarted<> started = {}) const;
+};
+
+} // namespace detail
 
 /// Usable for implementing live objects, if the only things needed
 /// from their `run()` methods is establishing a nursery:
@@ -366,7 +437,7 @@ template <class Ret> class TaskStarted {
 /// The nursery pointer passed as an argument will be initialized once
 /// the nursery is opened, and reset to nullptr when the nursery
 /// is closed. Does not return until cancelled.
-Task<void> openNursery(Nursery*& ptr, TaskStarted<> started = {});
+static constexpr detail::NurseryOpener openNursery(detail::TagCtor{});
 
 
 // ------------------------------------------------------------------------------------
@@ -376,34 +447,104 @@ Task<void> openNursery(Nursery*& ptr, TaskStarted<> started = {});
 // Nursery::StartAwaiter
 //
 
-template <class Ret>
-class Nursery::StartAwaiterBase : protected TaskParent<void>,
-                                  private detail::Noncopyable {
-    friend TaskStarted<Ret>;
+namespace detail {
 
-    enum Flags { Cancelling = 1 };
+template <class Ret> class TaskStartedSink : private Noncopyable {
+    friend TaskStarted<Ret>;
+    virtual void markStarted(detail::InhabitedType<Ret>) = 0;
+};
+
+template <class Policy, class Ret, class Callable, class... Args>
+class NurseryStartAwaiter
+  : public detail::TaskStartedSink<Ret>,
+    private detail::TaskParent<detail::PolicyReturnTypeFor<Policy, void>> {
+    friend BasicNursery<Policy>;
+    class Maker;
+    using TaskReturnType = PolicyReturnTypeFor<Policy, void>;
 
   public:
-    explicit StartAwaiterBase(Nursery* nursery) : nursery_(nursery) {}
-    StartAwaiterBase(StartAwaiterBase&& rhs)
-      : nursery_(std::exchange(rhs.nursery_, nullptr)) {
-        CORRAL_ASSERT((handle_ == noopHandle()) && !promise_);
+    NurseryStartAwaiter(NurseryStartAwaiter&&) = default;
+    NurseryStartAwaiter& operator=(NurseryStartAwaiter&&) = delete;
+
+    ~NurseryStartAwaiter() {
+        CORRAL_ASSERT(!nursery_ && "Nursery::StartAwaiter not awaited");
     }
 
-  protected:
+    bool await_early_cancel() noexcept {
+        setCancelling();
+        return false;
+    }
+
+    bool await_ready() const noexcept { return false; }
+
+    void await_set_executor(Executor* ex) noexcept { executor_.setPtr(ex); }
+
+    Handle await_suspend(Handle h) {
+        CORRAL_TRACE("    ...Nursery::start() %p", this);
+        detail::PromisePtr<TaskReturnType> promise{std::apply(
+                [this](auto&&... args) {
+                    return nursery_->makePromise(std::move(callable_),
+                                                 std::move(args)...,
+                                                 TaskStarted<Ret>{this});
+                },
+                std::move(args_))};
+
+        if (result_.completed()) {
+            // TaskStarted<> was invoked before promise construction,
+            // and handOff() was skipped; hand off the promise to the nursery
+            // ourselves.
+            std::exchange(nursery_, nullptr)->doStart(promise.release());
+            return h;
+        } else {
+            ++nursery_->pendingTaskCount_;
+            handle_ = h;
+            promise->setExecutor(executor_.ptr());
+            if (isCancelling()) {
+                promise->cancel();
+            }
+            promise_ = std::move(promise);
+            return promise_->start(this, h);
+        }
+    }
+
+    detail::PolicyReturnTypeFor<Policy, Ret> await_resume() && {
+        return std::move(result_).value();
+    }
+
+    bool await_cancel(Handle) noexcept {
+        if (promise_) {
+            setCancelling();
+            promise_->cancel();
+        }
+        return false;
+    }
+    auto await_must_resume() const noexcept { return std::false_type{}; }
+
+  private:
+    NurseryStartAwaiter(BasicNursery<Policy>* nursery,
+                        Callable&& callable,
+                        std::tuple<Args...>&& args)
+      : nursery_(nursery),
+        callable_(std::forward<Callable>(callable)),
+        args_(std::move(args)) {}
+
+    void markStarted(detail::InhabitedType<Ret> ret) override {
+        if constexpr (!std::is_same_v<Ret, void>) {
+            result_.storeValue(Policy::wrapValue(std::move(ret)));
+        } else if constexpr (!detail::PolicyUsesErrorCodes<Policy>) {
+            result_.storeValue(detail::Void{});
+        } else {
+            result_.storeValue(Policy::wrapValue());
+        }
+        handOff();
+    }
+
+    enum Flags { Cancelling = 1 };
     bool isCancelling() const { return executor_.bits() & Cancelling; }
     void setCancelling() { executor_.setBits(Cancelling); }
 
-  private:
-    void storeValue(detail::Void) override {
-        CORRAL_ASSERT(isCancelling() &&
-                      "Nursery task completed without signalling readiness");
-    }
-    void storeException() override { result_.storeException(); }
-    void cancelled() override { result_.markCancelled(); }
-
     Handle continuation(detail::BasePromise* p) noexcept override {
-        if (Nursery* n = std::exchange(nursery_, nullptr)) {
+        if (BasicNursery<Policy>* n = std::exchange(nursery_, nullptr)) {
             // The task completed without calling TaskStarted<>::operator().
             --n->pendingTaskCount_;
         }
@@ -415,11 +556,11 @@ class Nursery::StartAwaiterBase : protected TaskParent<void>,
             return;
         }
 
-        detail::Promise<void>* p = promise_.release();
+        detail::Promise<TaskReturnType>* p = promise_.release();
         if (p) {
             p->setExecutor(nursery_->executor());
             p->reparent(nursery_, nursery_->parent_);
-            Nursery* n = std::exchange(nursery_, nullptr);
+            BasicNursery<Policy>* n = std::exchange(nursery_, nullptr);
             --n->pendingTaskCount_;
             n->adopt(p);
             std::exchange(handle_, noopHandle()).resume();
@@ -432,104 +573,95 @@ class Nursery::StartAwaiterBase : protected TaskParent<void>,
         }
     }
 
-
-  protected:
-    Nursery* nursery_;
-    detail::Result<Ret> result_;
-    Handle handle_ = noopHandle();
-    detail::PromisePtr<void> promise_;
-    detail::PointerBits<Executor, Flags, 1> executor_;
-};
-
-template <class Ret, class Callable, class... Args>
-class Nursery::StartAwaiter : public StartAwaiterBase<Ret> {
-    friend Nursery;
-
-  public:
-    StartAwaiter(StartAwaiter&&) = default;
-    StartAwaiter& operator=(StartAwaiter&&) = delete;
-
-    bool await_early_cancel() noexcept {
-        this->setCancelling();
-        return false;
-    }
-
-    bool await_ready() const noexcept { return false; }
-
-    void await_set_executor(Executor* ex) noexcept {
-        this->executor_.setPtr(ex);
-    }
-
-    Handle await_suspend(Handle h) {
-        CORRAL_TRACE("    ...Nursery::start() %p", this);
-        detail::PromisePtr<void> promise{std::apply(
-                [this](auto&&... args) {
-                    return this->nursery_->makePromise(std::move(callable_),
-                                                       std::move(args)...,
-                                                       makeTaskStarted(this));
-                },
-                std::move(args_))};
-
-        if (this->result_.completed()) {
-            // TaskStarted<> was invoked before promise construction,
-            // and handOff() was skipped; hand off the promise to the nursery
-            // ourselves.
-            std::exchange(this->nursery_, nullptr)->doStart(promise.release());
-            return h;
+    // TaskParent<> implementation
+    void storeValue(
+            detail::InhabitedType<detail::PolicyReturnTypeFor<Policy, void>>
+                    ret) override {
+        auto err = Policy::unwrapError(ret);
+        if (!Policy::hasError(err)) {
+            CORRAL_ASSERT(
+                    isCancelling() &&
+                    "Nursery task completed without signalling readiness");
+        } else if constexpr (detail::PolicyUsesErrorCodes<Policy>) {
+            result_.storeValue(Policy::wrapError(std::move(err)));
         } else {
-            ++this->nursery_->pendingTaskCount_;
-            this->handle_ = h;
-            promise->setExecutor(this->executor_.ptr());
-            if (this->isCancelling()) {
-                promise->cancel();
+            CORRAL_ASSERT_UNREACHABLE();
+        }
+    }
+    void storeException() override { result_.storeException(); }
+    void cancelled() override { result_.markCancelled(); }
+
+    // Construction
+
+    class Maker {
+      public:
+        Maker(BasicNursery<Policy>* nursery,
+              Callable&& callable,
+              Args&&... args)
+          : nursery_(nursery),
+            callable_(std::forward<Callable>(callable)),
+            args_(std::forward<Args>(args)...) {}
+
+        // NOLINTNEXTLINE(performance-noexcept-move-constructor)
+        Maker(Maker&& rhs) noexcept(
+                std::is_nothrow_move_constructible_v<Callable> &&
+                std::is_nothrow_move_constructible_v<std::tuple<Args...>>)
+          : nursery_(std::exchange(rhs.nursery_, nullptr)),
+            callable_(std::move(rhs.callable_)),
+            args_(std::move(rhs.args_)) {}
+
+        Maker& operator=(Maker&&) = delete;
+
+        ~Maker() {
+            if (nursery_) {
+                std::apply(
+                        [this](auto&&... args) {
+                            nursery_->start(std::move(callable_),
+                                            std::move(args)...,
+                                            TaskStarted<Ret>(nullptr));
+                        },
+                        std::move(args_));
             }
-            this->promise_ = std::move(promise);
-            return this->promise_->start(this, h);
         }
-    }
 
-    Ret await_resume() && { return std::move(this->result_).value(); }
-    bool await_cancel(Handle) noexcept {
-        if (this->promise_) {
-            this->setCancelling();
-            this->promise_->cancel();
-        }
-        return false;
-    }
-    auto await_must_resume() const noexcept { return std::false_type{}; }
-
-    ~StartAwaiter() {
-        if (this->nursery_) {
-            std::apply(
-                    [this](auto&&... args) {
-                        this->nursery_->start(
-                                std::move(callable_), std::move(args)...,
-                                makeTaskStarted(
-                                        static_cast<StartAwaiterBase<Ret>*>(
-                                                nullptr)));
-                    },
+        auto operator co_await() && {
+            return NurseryStartAwaiter<Policy, Ret, Callable, Args...>(
+                    std::exchange(nursery_, nullptr), std::move(callable_),
                     std::move(args_));
         }
+
+      private:
+        BasicNursery<Policy>* nursery_;
+        Callable callable_;
+        std::tuple<Args...> args_;
+    };
+
+    static auto makeAwaitable(BasicNursery<Policy>* nursery,
+                              Callable&& callable,
+                              Args&&... args) {
+        return Maker(nursery, std::forward<Callable>(callable),
+                     std::forward<Args>(args)...);
     }
 
   private:
-    StartAwaiter(Nursery* nursery, Callable&& callable, Args&&... args)
-      : StartAwaiterBase<Ret>(nursery),
-        callable_(std::forward<Callable>(callable)),
-        args_(std::forward<Args>(args)...) {}
+    BasicNursery<Policy>* nursery_;
+    Handle handle_ = noopHandle();
+    detail::PromisePtr<TaskReturnType> promise_;
+    detail::PointerBits<Executor, Flags, 1> executor_;
 
-  private:
     Callable callable_;
     std::tuple<Args...> args_;
+    detail::Result<detail::PolicyReturnTypeFor<Policy, Ret>> result_;
 };
+
+} // namespace detail
 
 template <class Ret>
 void TaskStarted<Ret>::operator()(detail::InhabitedType<Ret> ret)
     requires(!std::is_same_v<Ret, void>)
 {
     if (auto p = std::exchange(parent_, nullptr)) {
-        p->result_.storeValue(std::forward<Ret>(ret));
-        p->handOff();
+        p->markStarted(std::forward<Ret>(ret));
     }
 }
 
@@ -538,124 +670,38 @@ void TaskStarted<Ret>::operator()()
     requires(std::is_same_v<Ret, void>)
 {
     if (auto p = std::exchange(parent_, nullptr)) {
-        p->result_.storeValue({});
-        p->handOff();
+        p->markStarted(detail::Void{});
     }
 }
 
 //
-// Nursery
+// detail::NurseryBase
 //
 
-/// An exception_ptr value meaning the nursery has been cancelled due to an
-/// explicit request. This won't result in any exception being propagated to the
-/// caller, but any further tasks spawned into the nursery will get immediately
-/// cancelled.
-inline std::exception_ptr Nursery::cancellationRequest() {
-    struct Tag {};
-    static const std::exception_ptr ret = std::make_exception_ptr(Tag{});
-    return ret;
+namespace detail {
+
+template <class Ret>
+inline Handle NurseryBase::addPromise(detail::Promise<Ret>* promise,
+                                      TaskParent<Ret>* parent) {
+    CORRAL_ASSERT(promise);
+    adopt(promise);
+    promise->setExecutor(executor());
+    return promise->start(parent, parent_);
 }
 
-inline void Nursery::rethrowException() {
-    if (exception_ && exception_ != cancellationRequest()) {
-        std::rethrow_exception(exception_);
-    }
-}
-
-inline void Nursery::adopt(detail::BasePromise* promise) {
-    CORRAL_ASSERT(executor_ && "Nursery is closed to new arrivals");
+inline void NurseryBase::adopt(detail::BasePromise* promise) {
+    CORRAL_ASSERT(executor_.ptr() && "Nursery is closed to new arrivals");
     CORRAL_TRACE("pr %p handed to nursery %p (%zu tasks total)", promise, this,
                  taskCount_ + 1);
-    if (exception_) {
+    if (cancelling()) {
         promise->cancel();
     }
     tasks_.push_back(*promise);
     ++taskCount_;
 }
 
-template <class Ret>
-inline Handle Nursery::addPromise(detail::Promise<Ret>* promise,
-                                  TaskParent<Ret>* parent) {
-    CORRAL_ASSERT(promise);
-    adopt(promise);
-    promise->setExecutor(executor_);
-    return promise->start(parent, parent_);
-}
-
-template <class Callable, class... Args>
-detail::Promise<void>* Nursery::makePromise(Callable callable, Args... args) {
-    Task<void> ret;
-    if constexpr ((std::is_reference_v<Callable> &&
-                   std::is_invocable_r_v<Task<>, Callable>) ||
-                  std::is_convertible_v<Callable, Task<> (*)()>) {
-        // The awaitable is an async lambda (lambda that produces a Task<>)
-        // and it either was passed by lvalue reference or it is stateless,
-        // and no arguments were supplied.
-        // In this case, we don't have to worry about the lifetime of its
-        // captures, and can thus save an allocation here.
-        ret = callable();
-    } else {
-        // The lambda has captures, or we're working with a different
-        // awaitable type, so wrap it into another async function.
-        // The contents of the awaitable object (such as the lambda
-        // captures) will be kept alive as an argument of the new
-        // async function.
-
-        // Note: cannot use `std::invoke()` here, as any temporaries
-        // created inside it will be destroyed before `invoke()` returns.
-        // We need funciton call and `co_await` inside one statement,
-        // so mimic `std::invoke()` logic here.
-        if constexpr (std::is_member_pointer_v<Callable>) {
-            ret = [](Callable c, auto obj, auto... a) -> Task<> {
-                if constexpr (std::is_pointer_v<decltype(obj)>) {
-                    co_await (obj->*c)(std::move(a)...);
-                } else if constexpr (detail::is_reference_wrapper_v<
-                                             decltype(obj)>) {
-                    co_await (obj.get().*c)(std::move(a)...);
-                } else {
-                    co_await (std::move(obj).*c)(std::move(a)...);
-                }
-            }(std::move(callable), std::move(args)...);
-        } else {
-            ret = [](Callable c, Args... a) -> Task<> {
-                co_await (std::move(c))(std::move(a)...);
-            }(std::move(callable), std::move(args)...);
-        }
-    }
-
-    return ret.release();
-}
-
-template <class Callable, class... Args>
-    requires(std::invocable<Callable, Args...> &&
-             Awaitable<std::invoke_result_t<Callable, Args...>> &&
-             !std::invocable<Callable, Args..., detail::TaskStartedTag>)
-void Nursery::start(Callable callable, Args... args) {
-    doStart(makePromise(std::forward<Callable>(callable),
-                        std::forward<Args>(args)...));
-}
-
-template <class Ret /* = detail::Unspecified*/, class Callable, class... Args>
-    requires(std::invocable<Callable, Args..., detail::TaskStartedTag> &&
-             Awaitable<std::invoke_result_t<Callable,
-                                            Args...,
-                                            detail::TaskStartedTag>>)
-Awaitable auto Nursery::start(Callable callable, Args... args) {
-    if constexpr (std::is_same_v<Ret, detail::Unspecified>) {
-        using Sig = detail::CallableSignature<Callable>;
-        using TaskStartedArg = typename Sig::template Arg<Sig::Arity - 1>;
-        using ResultType = typename TaskStartedArg::ResultType;
-        return StartAwaiter<ResultType, Callable, Args...>(
-                this, std::move(callable), std::move(args)...);
-    } else {
-        return StartAwaiter<Ret, Callable, Args...>(this, std::move(callable),
-                                                    std::move(args)...);
-    }
-}
-
-inline void Nursery::doCancel() {
-    if (!executor_ || tasks_.empty()) {
+inline void NurseryBase::doCancel() {
+    if (!executor() || tasks_.empty()) {
         return;
     }
 
@@ -663,11 +709,11 @@ inline void Nursery::doCancel() {
     // invalidating iterators to task being cancelled or its
     // neighbors, thereby making it impossible to traverse through
     // tasks_ safely; so defer calling cancel() through the executor.
-    Executor* ex = executor_;
+    Executor* ex = executor_.ptr();
     ex->capture(
             [this] {
                 for (detail::BasePromise& t : tasks_) {
-                    executor_->schedule(
+                    executor()->schedule(
                             +[](detail::BasePromise* p) noexcept {
                                 p->cancel();
                             },
@@ -679,46 +725,203 @@ inline void Nursery::doCancel() {
     ex->runSoon();
 }
 
-inline void Nursery::cancel() {
-    if (exception_) {
+inline void NurseryBase::cancel() {
+    if (cancelling()) {
         return; // already cancelling
     }
     CORRAL_TRACE("nursery %p cancellation requested", this);
-    if (!exception_) {
-        exception_ = cancellationRequest();
-    }
+    executor_.setBits(Cancelling);
     doCancel();
 }
 
-inline void Nursery::storeException() {
+} // namespace detail
+
+
+//
+// BasicNursery
+//
+
+template <class Policy>
+detail::PolicyReturnTypeFor<Policy, void> BasicNursery<Policy>::wrapError() {
+    if (!Policy::hasError(error_)) {
+        return Policy::wrapValue();
+    } else if constexpr (!detail::PolicyUsesErrorCodes<Policy>) {
+        Policy::wrapError(error_);
+        CORRAL_ASSERT_UNREACHABLE();
+    } else {
+        return Policy::wrapError(error_);
+    }
+}
+
+template <class Policy>
+template <class Callable, class... Args>
+detail::Promise<typename BasicNursery<Policy>::TaskReturnType>* //
+BasicNursery<Policy>::makePromise(Callable callable, Args... args) {
+    using Ret = Task<TaskReturnType>;
+    Ret ret;
+    if constexpr ((std::is_reference_v<Callable> &&
+                   std::is_invocable_r_v<Ret, Callable>) ||
+                  std::is_convertible_v<Callable, Ret (*)()>) {
+        // The awaitable is an async lambda (lambda that produces a Task<>)
+        // and it either was passed by lvalue reference or it is stateless,
+        // and no arguments were supplied.
+        // In this case, we don't have to worry about the lifetime of its
+        // captures, and can thus save an allocation here.
+        ret = callable();
+    } else {
+        using PassedReturnType = detail::AwaitableReturnType<
+                std::invoke_result_t<Callable, Args...>>;
+        // The lambda has captures, or we're working with a different
+        // awaitable type, so wrap it into another async function.
+        // The contents of the awaitable object (such as the lambda
+        // captures) will be kept alive as an argument of the new
+        // async function.
+
+        // Note: cannot use `std::invoke()` here, as any temporaries
+        // created inside it will be destroyed before `invoke()` returns.
+        // We need funciton call and `co_await` inside one statement,
+        // so mimic `std::invoke()` logic here.
+        if constexpr (std::is_member_pointer_v<Callable>) {
+            ret = [](Callable c, auto obj, auto... a) -> Ret {
+                if constexpr (std::is_same_v<PassedReturnType, detail::Void> ||
+                              std::is_same_v<TaskReturnType, void>) {
+                    // Either we are given a void-returning awaitable, or we are
+                    // a void-returning task ourselves here; in either case
+                    // we cannot `co_return co_await ...` here.
+
+                    // Either exceptions are used to indicate failure
+                    // (in which case they will auto-propagate)...
+                    if constexpr (std::is_pointer_v<decltype(obj)>) {
+                        co_await (obj->*c)(std::move(a)...);
+                    } else if constexpr (detail::is_reference_wrapper_v<
+                                                 decltype(obj)>) {
+                        co_await (obj.get().*c)(std::move(a)...);
+                    } else {
+                        co_await (std::move(obj).*c)(std::move(a)...);
+                    }
+
+                    // ...or the task is infallible, so return an indication
+                    // of success in the used policy.
+                    if constexpr (!std::is_same_v<TaskReturnType, void>) {
+                        co_return Policy::wrapValue();
+                    }
+
+                } else {
+                    // The awaitable indicates its success or failure through
+                    // returning a value, so simply pass it further up.
+                    if constexpr (std::is_pointer_v<decltype(obj)>) {
+                        co_return co_await (obj->*c)(std::move(a)...);
+                    } else if constexpr (detail::is_reference_wrapper_v<
+                                                 decltype(obj)>) {
+                        co_return co_await (obj.get().*c)(std::move(a)...);
+                    } else {
+                        co_return co_await (std::move(obj).*c)(std::move(a)...);
+                    }
+                }
+            }(std::move(callable), std::move(args)...);
+        } else {
+            ret = [](Callable c, Args... a) -> Ret {
+                // See comments above for description of alternatives here
+                if constexpr (std::is_same_v<PassedReturnType, detail::Void>) {
+                    co_await (std::move(c))(std::move(a)...);
+                    if constexpr (!std::is_same_v<TaskReturnType, void>) {
+                        co_return Policy::wrapValue();
+                    }
+                } else {
+                    co_return co_await (std::move(c))(std::move(a)...);
+                }
+            }(std::move(callable), std::move(args)...);
+        }
+    }
+
+    return ret.release();
+}
+
+template <class Policy>
+template <class Callable, class... Args>
+    requires(std::invocable<Callable, Args...> &&
+             Awaitable<std::invoke_result_t<Callable, Args...>> &&
+             !std::invocable<Callable, Args..., detail::TaskStartedTag>)
+void BasicNursery<Policy>::start(Callable callable, Args... args) {
+    doStart(makePromise(std::forward<Callable>(callable),
+                        std::forward<Args>(args)...));
+}
+
+template <class Policy>
+template <class Ret /* = detail::Unspecified*/, class Callable, class... Args>
+    requires(std::invocable<Callable, Args..., detail::TaskStartedTag> &&
+             Awaitable<std::invoke_result_t<Callable,
+                                            Args...,
+                                            detail::TaskStartedTag>>)
+Awaitable auto BasicNursery<Policy>::start(Callable callable, Args... args) {
+    if constexpr (!std::is_same_v<Ret, detail::Unspecified>) {
+        return detail::NurseryStartAwaiter<Policy, Ret, Callable, Args...>::
+                makeAwaitable(this, std::move(callable), std::move(args)...);
+    } else if constexpr (std::invocable<Callable, Args..., TaskStarted<>>) {
+        // Explicitly check for `TaskStarted<void>` applicability here
+        // to simplify passing polymorphic callables, whose signature
+        // cannot be deduced (including `openNursery()`).
+        return detail::NurseryStartAwaiter<Policy, void, Callable, Args...>::
+                makeAwaitable(this, std::move(callable), std::move(args)...);
+    } else {
+        using Sig = detail::CallableSignature<Callable>;
+        using TaskStartedArg = typename Sig::template Arg<Sig::Arity - 1>;
+        using ResultType = typename TaskStartedArg::ResultType;
+        return detail::NurseryStartAwaiter<
+                Policy, ResultType, Callable,
+                Args...>::makeAwaitable(this, std::move(callable),
+                                        std::move(args)...);
+    }
+}
+
+template <class Policy>
+void BasicNursery<Policy>::storeError(typename Policy::ErrorType e) noexcept {
     if (parent_ == nullptr) {
         // This is an UnsafeNursery that has not been join()'ed. There is no
-        // one we can pass our exception to, so we have no choice but to...
-        std::terminate();
+        // one we can pass our error to, so we have no choice but to...
+        Policy::terminateBy(e);
     }
-    bool needCancel = (!exception_);
-    if (!exception_ || exception_ == cancellationRequest()) {
-        exception_ = std::current_exception();
+    bool needCancel = !cancelling();
+    if (!Policy::hasError(error_)) {
+        error_ = std::move(e);
     }
+    executor_.setBits(Cancelling);
     if (needCancel) {
         doCancel();
     }
 }
 
+template <class Policy>
+void BasicNursery<Policy>::storeValue(
+        detail::InhabitedType<typename BasicNursery<Policy>::TaskReturnType>
+                value) {
+    if constexpr (!std::is_same_v<TaskReturnType, void>) {
+        auto err = Policy::unwrapError(value);
+        if (Policy::hasError(err)) {
+            storeError(std::move(err));
+        }
+    }
+}
 
-inline Handle Nursery::continuation(detail::BasePromise* promise) noexcept {
+template <class Policy> void BasicNursery<Policy>::storeException() {
+    storeError(Policy::fromCurrentException());
+}
+
+template <class Policy>
+inline Handle BasicNursery<Policy>::continuation(
+        detail::BasePromise* promise) noexcept {
     CORRAL_TRACE("pr %p done in nursery %p (%zu tasks remaining)", promise,
                  this, taskCount_ - 1);
     tasks_.erase(*promise);
     --taskCount_;
 
-    Executor* executor = executor_;
+    Executor* executor = executor_.ptr();
     Handle ret = noopHandle();
     // NB: in an UnsafeNursery, parent_ is the task that called join(), or
     // nullptr if no one has yet
     if (tasks_.empty() && pendingTaskCount_ == 0 && parent_ != nullptr) {
         ret = std::exchange(parent_, nullptr);
-        executor_ = nullptr; // nursery is now closed
+        executor_.setPtr(nullptr); // nursery is now closed
     }
 
     // Defer promise destruction to the executor, as this may call
@@ -739,8 +942,9 @@ inline Handle Nursery::continuation(detail::BasePromise* promise) noexcept {
 }
 
 
-inline void Nursery::introspect(detail::TaskTreeCollector& c,
-                                const char* title) const noexcept {
+template <class Policy>
+void BasicNursery<Policy>::introspect(detail::TaskTreeCollector& c,
+                                      const char* title) const noexcept {
     c.node(title);
     for (auto& t : tasks_) {
         c.child(t);
@@ -751,7 +955,9 @@ inline void Nursery::introspect(detail::TaskTreeCollector& c,
 // Logic for binding the nursery parent to the nursery
 //
 
-template <class Derived> class Nursery::ParentAwaiter {
+namespace detail {
+
+template <class Derived, class Policy> class NurseryParentAwaiter {
     Derived& self() { return static_cast<Derived&>(*this); }
     const Derived& self() const { return static_cast<const Derived&>(*this); }
 
@@ -764,36 +970,41 @@ template <class Derived> class Nursery::ParentAwaiter {
         self().nursery_.cancel();
         return false;
     }
-    void await_resume() {
+    [[nodiscard]] PolicyReturnTypeFor<Policy, void> await_resume() {
         CORRAL_TRACE("nursery %p done", &self().nursery_);
-        self().nursery_.rethrowException();
+        return self().nursery_.wrapError();
     }
     bool await_must_resume() const noexcept {
-        return self().nursery_.exception_ != Nursery::cancellationRequest();
+        return Policy::hasError(self().nursery_.error_);
     }
 };
 
 template <class NurseryT>
-class Nursery::JoinAwaiter
-  : public Nursery::ParentAwaiter<JoinAwaiter<NurseryT>> {
-    friend ParentAwaiter<JoinAwaiter<NurseryT>>;
+class NurseryJoinAwaiter
+  : public NurseryParentAwaiter<NurseryJoinAwaiter<NurseryT>,
+                                typename NurseryT::Policy> {
+    friend NurseryParentAwaiter<NurseryJoinAwaiter<NurseryT>,
+                                typename NurseryT::Policy>;
     friend NurseryT;
 
     NurseryT& nursery_;
 
-    explicit JoinAwaiter(NurseryT& nursery) : nursery_(nursery) {}
+    explicit NurseryJoinAwaiter(NurseryT& nursery) : nursery_(nursery) {}
 
   public:
-    ~JoinAwaiter()
-        requires(std::derived_from<NurseryT, Nursery>)
+    ~NurseryJoinAwaiter()
+        requires(std::derived_from<NurseryT,
+                                   BasicNursery<typename NurseryT::Policy>>)
     = default;
 
-    bool await_ready() const noexcept { return nursery_.executor_ == nullptr; }
+    bool await_ready() const noexcept {
+        return nursery_.executor_.ptr() == nullptr;
+    }
     bool await_suspend(Handle h) {
         CORRAL_ASSERT(!nursery_.parent_);
         if (nursery_.tasks_.empty()) {
             // Just close the nursery, don't actually suspend
-            nursery_.executor_ = nullptr;
+            nursery_.executor_.setPtr(nullptr);
             return false;
         }
         nursery_.parent_ = h;
@@ -804,19 +1015,25 @@ class Nursery::JoinAwaiter
     }
 };
 
-inline corral::Awaitable<void> auto UnsafeNursery::join() {
-    return JoinAwaiter(*this);
+} // namespace detail
+
+template <class Policy>
+Awaitable<typename BasicNursery<Policy>::TaskReturnType> auto
+BasicUnsafeNursery<Policy>::join() {
+    return detail::NurseryJoinAwaiter(*this);
 }
 
 //
 // Nursery construction
 //
 
+template <class Policy>
 template <class Callable>
-class Nursery::Scope : public detail::NurseryScopeBase,
-                       public Nursery::ParentAwaiter<Scope<Callable>>,
-                       private detail::TaskParent<detail::NurseryBodyRetval> {
-    class Impl : public Nursery {
+class BasicNursery<Policy>::Scope
+  : public detail::NurseryScopeBase,
+    public detail::NurseryParentAwaiter<Scope<Callable>, Policy>,
+    private detail::TaskParent<detail::NurseryBodyRetval<Policy>> {
+    class Impl : public BasicNursery<Policy> {
       public:
         Impl() = default;
         Impl(Impl&&) noexcept = default;
@@ -825,13 +1042,15 @@ class Nursery::Scope : public detail::NurseryScopeBase,
   public:
     explicit Scope(Callable&& c) : callable_(std::move(c)) {}
 
-    void await_set_executor(Executor* ex) noexcept { nursery_.executor_ = ex; }
+    void await_set_executor(Executor* ex) noexcept {
+        nursery_.executor_.setPtr(ex);
+    }
 
     bool await_ready() const noexcept { return false; }
 
     Handle await_suspend(Handle h) {
         nursery_.parent_ = h;
-        Task<detail::NurseryBodyRetval> body = callable_(nursery_);
+        Task<detail::NurseryBodyRetval<Policy>> body = callable_(nursery_);
         CORRAL_TRACE("    ... nursery %p starting with task %p", &nursery_,
                      body.promise_.get());
         return nursery_.addTask(std::move(body), this);
@@ -842,23 +1061,36 @@ class Nursery::Scope : public detail::NurseryScopeBase,
     }
 
   private:
-    void storeValue(detail::NurseryBodyRetval retval) override {
-        if (std::holds_alternative<detail::CancelTag>(retval)) {
+    void storeValue(
+            detail::NurseryBodyRetval<Policy> retval) noexcept override {
+        if (std::holds_alternative<detail::JoinTag>(retval)) {
+            // do nothing
+        } else if (std::holds_alternative<detail::CancelTag>(retval)) {
             nursery_.cancel();
+        } else if constexpr (detail::PolicyUsesErrorCodes<Policy>) {
+            nursery_.storeError(
+                    std::get<typename Policy::ErrorType>(std::move(retval)));
+        } else {
+            CORRAL_ASSERT_UNREACHABLE();
         }
     }
-    void storeException() override { nursery_.storeException(); }
+
+    void storeException() noexcept override {
+        nursery_.storeError(Policy::fromCurrentException());
+    }
+
     Handle continuation(detail::BasePromise* promise) noexcept override {
         return nursery_.continuation(promise);
     }
 
   private:
-    friend Nursery::ParentAwaiter<Scope>; // so it can access nursery_
+    friend detail::NurseryParentAwaiter<Scope, Policy>; // so it can access
+                                                        // nursery_
     [[no_unique_address]] Callable callable_;
     Impl nursery_;
 };
 
-struct Nursery::Factory {
+template <class Policy> struct BasicNursery<Policy>::Factory {
     template <class Callable> auto operator%(Callable&& c) {
         return Scope<Callable>(std::forward<Callable>(c));
     };
@@ -866,42 +1098,64 @@ struct Nursery::Factory {
 
 
 namespace detail {
-class BackreferencedNursery final : public Nursery {
-    friend Task<void> corral::openNursery(Nursery*&, TaskStarted<>);
-    friend Nursery::JoinAwaiter<BackreferencedNursery>;
+template <class Policy>
+class BackreferencedNursery final : public BasicNursery<Policy> {
+    friend NurseryOpener;
+    friend NurseryJoinAwaiter<BackreferencedNursery<Policy>>;
 
   private /*methods*/:
-    BackreferencedNursery(Executor* executor, Nursery*& backref)
+    BackreferencedNursery(Executor* executor, BasicNursery<Policy>*& backref)
       : backref_(backref) {
         backref_ = this;
-        executor_ = executor;
+        this->executor_.set(executor, 0);
     }
 
     Handle continuation(detail::BasePromise* p) noexcept override {
-        if (taskCount_ == 1 && pendingTaskCount_ == 0) {
+        if (this->taskCount_ == 1 && this->pendingTaskCount_ == 0) {
             backref_ = nullptr;
         }
-        return Nursery::continuation(p);
+        return BasicNursery<Policy>::continuation(p);
     }
 
-    corral::Awaitable<void> auto join() { return JoinAwaiter(*this); }
+    corral::Awaitable<PolicyReturnTypeFor<Policy, void>> auto join() {
+        return detail::NurseryJoinAwaiter(*this);
+    }
 
     void await_introspect(detail::TaskTreeCollector& c) const noexcept {
-        introspect(c, "Nursery");
+        this->introspect(c, "Nursery");
     }
 
   private /*fields*/:
-    Nursery*& backref_;
+    BasicNursery<Policy>*& backref_;
 };
-} // namespace detail
 
+template <class Policy>
+Task<PolicyReturnTypeFor<Policy, void>> NurseryOpener::operator()(
+        BasicNursery<Policy>*& ptr, TaskStarted<> started /*= {}*/) const {
+    using Ret = detail::PolicyReturnTypeFor<Policy, void>;
 
-inline Task<void> openNursery(Nursery*& ptr, TaskStarted<> started /*= {}*/) {
     Executor* ex = co_await getExecutor();
-    detail::BackreferencedNursery nursery(ex, ptr);
-    nursery.start([]() -> Task<> { co_await SuspendForever{}; });
+    detail::BackreferencedNursery<Policy> nursery(ex, ptr);
+    nursery.start([]() -> Task<Ret> {
+        co_await SuspendForever{};
+        unreachable(); // make clang happy
+    });
     started();
-    co_await nursery.join();
+
+    if constexpr (std::is_same_v<Ret, void>) {
+        co_await nursery.join();
+    } else {
+        co_return co_await nursery.join();
+    }
 }
+
+template <class Policy>
+Task<PolicyReturnTypeFor<Policy, void>> NurseryOpener::operator()(
+        std::reference_wrapper<BasicNursery<Policy>*> ptr,
+        TaskStarted<> started /*= {}*/) const {
+    return (*this)(ptr.get(), std::move(started));
+}
+
+} // namespace detail
 
 } // namespace corral
