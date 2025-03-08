@@ -75,10 +75,12 @@ concept ApplicableErrorPolicy = requires {
     // A default-initialized ErrorType should indicate no error
     { typename P::ErrorType{} };
 
+#if __cpp_exceptions
     /// Converts the current exception to the ErrorType.
     /// May call std::unreachable() if the policy does not allow
     /// exceptions.
     { P::fromCurrentException() } -> std::same_as<typename P::ErrorType>;
+#endif
 
     /// Returns true if `e` holds a non-degenerate error.
     { P::hasError(e) } -> std::convertible_to<bool>;
@@ -149,6 +151,7 @@ template <class T> struct UseErrorPolicy {
 };
 
 
+#if __cpp_exceptions
 /// An error policy which uses C++ exceptions for error propagation.
 class UseExceptions {
   public:
@@ -182,7 +185,7 @@ class UseExceptions {
         std::rethrow_exception(ex);
     }
 };
-
+#endif
 
 namespace detail {
 [[noreturn]] void unreachable();
@@ -282,6 +285,13 @@ template <class Policy>
 static constexpr const bool PolicyUsesErrorCodes =
         !std::is_same_v<PolicyReturnTypeFor<Policy, void>, void>;
 
+template <class Policy> typename Policy::ErrorType errorFromCurrentException() {
+#if __cpp_exceptions
+    return Policy::fromCurrentException();
+#else
+    unreachable();
+#endif
+}
 
 template <class> class CoTry;
 struct CoTryFactory {

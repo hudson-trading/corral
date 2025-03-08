@@ -17,6 +17,7 @@ jobs:
           - gcc-12
           - gcc-13
           - gcc-14
+          - gcc-noexcept
           - clang-15
           - clang-16
           - gcc-arm32
@@ -39,6 +40,12 @@ jobs:
             deps: g++-14 libssl-dev
             cc: gcc-14
             cxx: g++-14
+
+          - variant: gcc-noexcept
+            deps: g++-14 libssl-dev
+            cc: gcc-14
+            cxx: g++-14
+            cxxflags: -fno-exceptions -fno-rtti
 
           - variant: clang-15
             deps: clang-15 g++-13 libstdc++-14-dev- libgcc-14-dev- libssl-dev

@@ -40,7 +40,7 @@ struct RethrowCurrentException;
 
 class TryBlockBase : public TaskParent<void> {
   protected:
-    std::exception_ptr exception_;
+    [[no_unique_address]] exception_ptr exception_;
     friend RethrowCurrentException;
 };
 
@@ -87,13 +87,11 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
         return false;
     }
 
-    bool await_must_resume() const noexcept {
-        return completed_ || exception_ != nullptr;
-    }
+    bool await_must_resume() const noexcept { return completed_ || exception_; }
 
     void await_resume() {
         if (exception_) {
-            std::rethrow_exception(exception_);
+            rethrow_exception(exception_);
         }
     }
 
@@ -112,25 +110,29 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
             storeValue(Void{});
             return continuation(nullptr);
         } else {
+#if __cpp_exceptions
             try {
+#endif
                 task_.reset(lambda(std::forward<Args>(args)...).release());
                 CORRAL_TRACE("   ...try-block %p (%s; pr = %p)", this,
                              stageName(stage_), task_.get());
                 task_->setExecutor(executor_);
                 return task_->start(this, parent_);
+#if __cpp_exceptions
             } catch (...) {
                 CORRAL_TRACE("   ...try-block %p, (%s; early-failed)", this,
                              stageName(stage_));
                 storeException();
                 return continuation(nullptr);
             }
+#endif
         }
     }
 
     void storeValue(Void) override {
         if (stage_ == Stage::TRY || stage_ == Stage::CATCH) {
             completed_ = true;
-            exception_ = nullptr;
+            exception_ = exception_ptr{};
         }
     }
 
@@ -138,7 +140,7 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
         if (stage_ == Stage::FINALLY && exception_) {
             std::terminate(); // multiple exceptions in flight
         } else {
-            exception_ = std::current_exception();
+            exception_ = current_exception();
         }
     }
 
@@ -157,10 +159,9 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
             if (exception_) {
                 stage_ = Stage::CATCH;
                 return dispatchException();
-            } else {
-                stage_ = Stage::FINALLY;
-                return invoke(finallyLambda_);
             }
+            stage_ = Stage::FINALLY;
+            return invoke(finallyLambda_);
 
         } else if (stage_ == Stage::CATCH) {
             stage_ = Stage::FINALLY;
@@ -175,6 +176,7 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
     }
 
     template <size_t I = 0> Handle dispatchException() {
+#if __cpp_exceptions
         if constexpr (I == sizeof...(Catch)) {
             return continuation(nullptr);
         } else {
@@ -192,6 +194,9 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
                 } catch (...) { return dispatchException<I + 1>(); }
             }
         }
+#else
+        unreachable();
+#endif
     }
 
     static const char* stageName(Stage s) {
@@ -233,6 +238,7 @@ template <class Try, class... Catch> class TryBlockBuilder {
     explicit TryBlockBuilder(Try&& t, std::tuple<Catch...> c)
       : m_try(std::forward<Try>(t)), m_catch(std::move(c)) {}
 
+#if __cpp_exceptions
     template <class C> auto catch_(C&& c) {
         using Sig = CallableSignature<C>;
         static_assert(Sig::Arity == 1 &&
@@ -244,6 +250,7 @@ template <class Try, class... Catch> class TryBlockBuilder {
                 std::tuple_cat(std::move(m_catch),
                                std::forward_as_tuple(std::forward<C>(c))));
     }
+#endif
 
     template <class Finally>
         requires(std::is_invocable_r_v<Task<void>, Finally>)
@@ -274,6 +281,7 @@ class TryBlockMacroFactory {
         Builder(Try t, std::tuple<Catch...> c)
           : try_(std::forward<Try>(t)), catch_(std::move(c)) {}
 
+#if __cpp_exceptions
         template <class C> auto operator/(C&& c) {
             using Sig = CallableSignature<C>;
             static_assert(Sig::Arity == 1 &&
@@ -286,6 +294,7 @@ class TryBlockMacroFactory {
                     std::tuple_cat(std::move(catch_),
                                    std::forward_as_tuple(std::forward<C>(c))));
         }
+#endif
 
         template <class Finally>
             requires(std::is_invocable_r_v<Task<void>, Finally>)
@@ -311,7 +320,7 @@ class TryBlockMacroFactory {
     }
 };
 
-
+#if __cpp_exceptions
 struct RethrowCurrentException {
     bool await_ready() const noexcept { return false; }
     bool await_early_cancel() noexcept { return false; }
@@ -338,10 +347,11 @@ struct RethrowCurrentException {
         return false;
     }
 
-    void await_resume() { std::rethrow_exception(exception_); }
+    void await_resume() { rethrow_exception(exception_); }
 
   private:
-    std::exception_ptr exception_;
+    exception_ptr exception_;
 };
+#endif
 
 } // namespace corral::detail

@@ -904,7 +904,7 @@ void BasicNursery<Policy>::storeValue(
 }
 
 template <class Policy> void BasicNursery<Policy>::storeException() {
-    storeError(Policy::fromCurrentException());
+    storeError(detail::errorFromCurrentException<Policy>());
 }
 
 template <class Policy>
@@ -1076,7 +1076,7 @@ class BasicNursery<Policy>::Scope
     }
 
     void storeException() noexcept override {
-        nursery_.storeError(Policy::fromCurrentException());
+        nursery_.storeError(detail::errorFromCurrentException<Policy>());
     }
 
     Handle continuation(detail::BasePromise* promise) noexcept override {

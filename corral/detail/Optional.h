@@ -66,7 +66,11 @@ class OptionalRef {
         if (has_value()) {
             return *ptr_;
         } else {
+#if __cpp_exceptions
             throw std::bad_optional_access();
+#else
+            std::terminate();
+#endif
         }
     }
 
@@ -86,7 +90,11 @@ class OptionalVoid {
 
     void value() const {
         if (!value_) {
+#if __cpp_exceptions
             throw std::bad_optional_access();
+#else
+            std::terminate();
+#endif
         }
     }
     void operator*() const {}

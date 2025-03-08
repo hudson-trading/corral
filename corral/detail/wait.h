@@ -319,18 +319,24 @@ class MuxHelper : public ProxyFrame {
             resumeFn = +[](CoroutineFrame* frame) {
                 static_cast<MuxHelper*>(frame)->invoke();
             };
+#if __cpp_exceptions
             try {
+#endif
                 awaiter_.await_suspend(this->toHandle()).resume();
+#if __cpp_exceptions
             } catch (...) {
                 setState(State::Failed);
                 mux()->invoke(Policy::fromCurrentException());
             }
+#endif
         }
     }
 
     void reportResult() {
         typename Policy::ErrorType err;
+#if __cpp_exceptions
         try {
+#endif
             setState(State::Succeeded);
             Ret ret = awaiter_.await_resume();
             if constexpr (!std::is_same_v<Ret, Void>) {
@@ -345,10 +351,12 @@ class MuxHelper : public ProxyFrame {
             } else { // infallible awaitable
                 new (storage_) StorageType(Void{});
             }
+#if __cpp_exceptions
         } catch (...) {
             setState(State::Failed);
             err = Policy::fromCurrentException();
         }
+#endif
         mux()->invoke(err);
     }
 
@@ -772,11 +780,14 @@ class MuxRange : public MuxBase<Policy, Self> {
                 std::align_val_t{alignof(Child)}));
 
         Child* p = children_;
+#if __cpp_exceptions
         try {
+#endif
             for (Awaitable&& awaitable : range) {
                 new (p) Child(std::forward<Awaitable>(awaitable));
                 ++p;
             }
+#if __cpp_exceptions
         } catch (...) {
             while (p != children_) {
                 (--p)->~Child();
@@ -784,6 +795,7 @@ class MuxRange : public MuxBase<Policy, Self> {
             operator delete(children_, std::align_val_t{alignof(Child)});
             throw;
         }
+#endif
 
         count_ = p - children_;
     }

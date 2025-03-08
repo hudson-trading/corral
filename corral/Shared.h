@@ -172,7 +172,7 @@ class Shared<Awaitable>::State : private detail::ProxyFrame,
     std::variant<std::monostate,
                  std::monostate,
                  typename Storage::Type,
-                 std::exception_ptr,
+                 detail::exception_ptr,
                  std::monostate,
                  std::monostate>
             result_;
@@ -255,10 +255,13 @@ Handle Shared<Awaitable>::State::suspend(AwaiterBase* ptr) {
             result_.template emplace<Cancelling>();
         }
 
+#if __cpp_exceptions
         try {
+#endif
             return awaiter_.await_suspend(this->toHandle());
+#if __cpp_exceptions
         } catch (...) {
-            auto ex = std::current_exception();
+            auto ex = detail::current_exception();
             CORRAL_ASSERT(
                     ex &&
                     "foreign exceptions and forced unwinds are not supported");
@@ -266,6 +269,7 @@ Handle Shared<Awaitable>::State::suspend(AwaiterBase* ptr) {
             invoke();
             return std::noop_coroutine(); // already woke up
         }
+#endif
     } else {
         return std::noop_coroutine();
     }
@@ -278,7 +282,9 @@ Ret Shared<Awaitable>::State::resultAs() {
     // false and the awaitable was then immediately ready. mustResume()
     // was checked already, so treat CancelPending like Incomplete.
     if (result_.index() == Incomplete || result_.index() == CancelPending) {
+#if __cpp_exceptions
         try {
+#endif
             if constexpr (std::is_same_v<ReturnType, void>) {
                 std::move(awaiter_).await_resume();
                 result_.template emplace<Value>();
@@ -286,9 +292,11 @@ Ret Shared<Awaitable>::State::resultAs() {
                 result_.template emplace<Value>(
                         Storage::wrap(std::move(awaiter_).await_resume()));
             }
+#if __cpp_exceptions
         } catch (...) {
-            result_.template emplace<Exception>(std::current_exception());
+            result_.template emplace<Exception>(detail::current_exception());
         }
+#endif
     }
 
     if (result_.index() == Value) [[likely]] {
@@ -299,7 +307,7 @@ Ret Shared<Awaitable>::State::resultAs() {
             return Storage::unwrapCRef(std::get<Value>(result_));
         }
     } else if (result_.index() == Exception) {
-        std::rethrow_exception(std::get<Exception>(result_));
+        detail::rethrow_exception(std::get<Exception>(result_));
     } else if constexpr (std::is_same_v<Ret, OptionalRef>) {
         return std::nullopt;
     } else {

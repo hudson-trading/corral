@@ -393,7 +393,11 @@ void awaitIntrospect(const Awaiter& awaiter, TaskTreeCollector& c) noexcept {
     if constexpr (Introspectable<Awaiter>) {
         awaiter.await_introspect(c);
     } else {
+#if __cpp_rtti
         c.node(&typeid(Awaiter));
+#else
+        c.node("<non-introspectable awaitable>");
+#endif
     }
 }
 
@@ -611,15 +615,17 @@ template <class T, class Awaiter = AwaiterType<T>> struct SanitizedAwaiter {
     }
 
     [[nodiscard]] Handle await_suspend(Handle h) {
-#ifdef CORRAL_AWAITABLE_STATE_DEBUG
+#if !defined(CORRAL_AWAITABLE_STATE_DEBUG)
+        return awaitSuspend(awaiter_, h);
+#elif !__cpp_exceptions
+        return awaitSuspend(awaiter_, checker_.aboutToSuspend(h));
+#else
         try {
             return awaitSuspend(awaiter_, checker_.aboutToSuspend(h));
         } catch (...) {
             checker_.suspendThrew();
             throw;
         }
-#else
-        return awaitSuspend(awaiter_, h);
 #endif
     }
 
@@ -869,7 +875,6 @@ template <class Callable> class AsCoroutineHandle : public CoroutineFrame {
     [[no_unique_address]] Callable callable_;
 };
 
-
 template <class Policy, Awaitable... Aw>
 struct ChooseErrorPolicyForAwaitablesImpl {
     using Type = Policy;
@@ -957,10 +962,10 @@ template <class T> class Result {
     {
         value_.template emplace<Value>(Storage<T>::wrap());
     }
-    void storeException(std::exception_ptr e) {
+    void storeException(exception_ptr e) {
         value_.template emplace<Exception>(std::move(e));
     }
-    void storeException() { storeException(std::current_exception()); }
+    void storeException() { storeException(current_exception()); }
     void markCancelled() { value_.template emplace<Cancelled>(); }
 
     bool completed() const { return value_.index() != Incomplete; }
@@ -972,7 +977,7 @@ template <class T> class Result {
     T value() && {
         if constexpr (std::is_same_v<T, void>) {
             if (hasException()) {
-                std::rethrow_exception(std::get<Exception>(std::move(value_)));
+                rethrow_exception(std::get<Exception>(std::move(value_)));
             }
         } else {
             if (hasValue()) {
@@ -980,7 +985,7 @@ template <class T> class Result {
             } else {
                 CORRAL_ASSERT(hasException() &&
                               "co_await on a null or cancelled task");
-                std::rethrow_exception(std::get<Exception>(value_));
+                rethrow_exception(std::get<Exception>(value_));
             }
         }
     }
@@ -988,7 +993,7 @@ template <class T> class Result {
   protected:
     std::variant<std::monostate,
                  typename Storage<T>::Type,
-                 std::exception_ptr,
+                 exception_ptr,
                  std::monostate>
             value_;
 

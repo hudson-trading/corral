@@ -42,11 +42,15 @@ struct TreeDumpElement {
 
             // If the tree node is an Introspectable awaiter,
             // this holds its name, as reported by `node()` call.
-            const char* /*name*/,
+            const char* /*name*/
 
+#if __cpp_rtti
             // If the tree node is an awaiter which is not Introspectable,
             // this holds its type.
-            const std::type_info* /*type*/> value;
+            ,
+            const std::type_info* /*type*/
+#endif
+            > value;
     int depth;
 };
 
@@ -62,10 +66,12 @@ class TaskTreeCollector {
         sink_(cookie_, elt);
     }
 
+#if __cpp_rtti
     void node(const std::type_info* ti) noexcept {
         TreeDumpElement elt{ti, depth_};
         sink_(cookie_, elt);
     }
+#endif
 
     void taskPC(uintptr_t pc) noexcept {
         TreeDumpElement elt{pc, depth_};
@@ -79,7 +85,11 @@ class TaskTreeCollector {
         if constexpr (Introspectable<Child>) {
             child.await_introspect(*this);
         } else {
+#if __cpp_rtti
             TreeDumpElement elt{&typeid(child), depth_};
+#else
+            TreeDumpElement elt{"<non-introspectable awaitable>", depth_};
+#endif
             sink_(cookie_, elt);
         }
     }

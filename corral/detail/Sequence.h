@@ -103,7 +103,7 @@ class Sequence : private ProxyFrame, private Noncopyable {
         // should return false here without consulting the awaitable further.
         // Similarly, if we're in neither the first nor the second stage,
         // the second stage must have completed via early cancellation.
-        bool ret = std::holds_alternative<std::exception_ptr>(second_) ||
+        bool ret = std::holds_alternative<exception_ptr>(second_) ||
                    (inSecondStage() && second().awaiter.await_must_resume());
         if (!ret && inSecondStage()) {
             // Destroy the second stage, which will release any resources
@@ -119,8 +119,8 @@ class Sequence : private ProxyFrame, private Noncopyable {
             second_.template emplace<std::monostate>();
         });
 
-        if (auto ex = std::get_if<std::exception_ptr>(&second_)) {
-            std::rethrow_exception(*ex);
+        if (auto ex = std::get_if<exception_ptr>(&second_)) {
+            rethrow_exception(*ex);
         } else {
             return second().awaiter.await_resume();
         }
@@ -193,14 +193,17 @@ class Sequence : private ProxyFrame, private Noncopyable {
         // (this is necessary if thenFn_() attempts to cancel us)
         second_.template emplace<std::monostate>();
 
+#if __cpp_exceptions
         try {
+#endif
             second_.template emplace<SecondStage>(this);
+#if __cpp_exceptions
         } catch (...) {
-            second_.template emplace<std::exception_ptr>(
-                    std::current_exception());
+            second_.template emplace<exception_ptr>(current_exception());
             parent_.resume();
             return;
         }
+#endif
 
         if (cancelling_) {
             if (second().awaiter.await_early_cancel()) {
@@ -229,7 +232,7 @@ class Sequence : private ProxyFrame, private Noncopyable {
                          std::monostate, // running neither (either constructing
                                          // second stage, or it confirmed early
                                          // cancellation)
-                         std::exception_ptr> // first stage threw an exception
+                         exception_ptr>  // first stage threw an exception
             second_;
     bool cancelling_ = false;
 };

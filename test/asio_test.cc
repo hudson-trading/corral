@@ -23,6 +23,10 @@
 //
 // SPDX-License-Identifier: MIT
 
+#include "config.h"
+
+#if __cpp_exceptions
+
 #include <chrono>
 
 #include <boost/asio.hpp>
@@ -39,7 +43,6 @@
 
 #include "../corral/asio.h"
 #include "../corral/corral.h"
-#include "config.h"
 #include "helpers.h"
 
 #define CORRAL_TEST_CASE(...)                                                  \
@@ -249,3 +252,5 @@ CORRAL_TEST_CASE("beast-https", "[asio]") {
 #endif
 
 } // namespace
+
+#endif // __cpp_exceptions

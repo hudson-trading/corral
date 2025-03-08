@@ -164,8 +164,9 @@ auto try_(TryBlock&& tryBlock) {
 #define CORRAL_TRY                                                             \
     co_yield ::corral::detail::TryBlockMacroFactory{} % [&]()                  \
             -> ::corral::Task<void>
-#define CORRAL_CATCH(arg) / [&](arg) -> ::corral::Task<void>
 #define CORRAL_FINALLY % [&]() -> ::corral::Task<void>
+#if __cpp_exceptions
+#define CORRAL_CATCH(arg) / [&](arg) -> ::corral::Task<void>
 
 /// As catch_() takes an asynchronous lambda, it will be executed outside
 /// of a normal C++ catch-block (as catch-blocks are not allowed to suspend),
@@ -179,7 +180,7 @@ static constexpr const detail::CoAwaitFactory<detail::RethrowCurrentException>
 /// A placeholder type for catch-all clauses in try-blocks
 /// (as `catch_([&](...) -> Task<>` is not allowed in C++).
 using Ellipsis = detail::Ellipsis;
-
+#endif
 
 /// Chains multiple awaitables together, without having to allocate a coroutine
 /// frame.

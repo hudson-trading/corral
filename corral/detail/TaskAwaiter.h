@@ -95,7 +95,6 @@ class TaskAwaiter final : public TaskParent<T>, private Noncopyable {
     void storeException() override { result_.storeException(); }
     void cancelled() override { result_.markCancelled(); }
 
-
     Handle continuation(BasePromise*) noexcept override {
         CORRAL_ASSERT(result_.completed() &&
                       "task exited without co_return'ing a result");

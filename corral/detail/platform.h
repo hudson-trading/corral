@@ -47,3 +47,24 @@
 #else
 #define CORRAL_UNUSED_MEMBER
 #endif
+
+
+namespace corral::detail {
+#if __cpp_exceptions
+using std::current_exception;
+using std::exception_ptr;
+using std::rethrow_exception;
+#else
+struct exception_ptr {
+    constexpr exception_ptr() noexcept = default;
+    explicit constexpr operator bool() const noexcept { return false; }
+};
+[[noreturn]] void unreachable();
+exception_ptr current_exception() noexcept {
+    unreachable();
+}
+[[noreturn]] void rethrow_exception(exception_ptr) {
+    unreachable();
+}
+#endif
+} // namespace corral::detail

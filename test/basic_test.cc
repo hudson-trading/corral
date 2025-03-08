@@ -477,6 +477,7 @@ CORRAL_TEST_CASE("mostof") {
         CATCH_CHECK(resumed);
     }
 
+#if __cpp_exceptions
     CATCH_SECTION("throws") {
         bool cancelled = false;
         CATCH_CHECK_THROWS(co_await mostOf(
@@ -490,6 +491,7 @@ CORRAL_TEST_CASE("mostof") {
                 }));
         CATCH_CHECK(cancelled);
     }
+#endif
 }
 
 CORRAL_TEST_CASE("allof") {
@@ -521,6 +523,7 @@ CORRAL_TEST_CASE("allof") {
         CATCH_CHECK(b == 43);
     }
 
+#if __cpp_exceptions
     CATCH_SECTION("throws") {
         bool cancelled = false;
         CATCH_CHECK_THROWS(co_await allOf(
@@ -534,6 +537,7 @@ CORRAL_TEST_CASE("allof") {
                 }));
         CATCH_CHECK(cancelled);
     }
+#endif
 }
 
 CORRAL_TEST_CASE("anyof-allof-mix") {
@@ -724,6 +728,7 @@ CORRAL_TEST_CASE("no-cancel") {
     CATCH_CHECK(resumed);
 }
 
+#if __cpp_exceptions
 CORRAL_TEST_CASE("no-cancel-exc") {
     CATCH_SECTION("nested-task") {
         CATCH_CHECK_THROWS(co_await [&]() -> Task<> {
@@ -749,6 +754,7 @@ CORRAL_TEST_CASE("no-cancel-exc") {
         });
     }
 }
+#endif
 
 CORRAL_TEST_CASE("mux-cancel") {
     auto task = [&]() -> Task<> { co_await t.sleep(5ms); };
@@ -1180,6 +1186,17 @@ CORRAL_TEST_CASE("nursery-multi-cancel") {
     };
 }
 
+CORRAL_TEST_CASE("nursery-cancel-from-outside") {
+    CORRAL_WITH_NURSERY(n) {
+        n.start([&]() -> Task<> { co_await t.sleep(10ms); });
+        t.schedule(1ms, [&] { n.cancel(); });
+        co_return join;
+    };
+
+    CATCH_CHECK(t.now() == 1ms);
+}
+
+#if __cpp_exceptions
 CORRAL_TEST_CASE("nursery-multi-exception") {
     auto task = [&](Nursery& n) -> Task<> {
         co_await t.sleep(1ms, noncancellable);
@@ -1212,16 +1229,6 @@ CORRAL_TEST_CASE("nursery-cancel-exception") {
     CATCH_CHECK(t.now() == 3ms);
 }
 
-CORRAL_TEST_CASE("nursery-cancel-from-outside") {
-    CORRAL_WITH_NURSERY(n) {
-        n.start([&]() -> Task<> { co_await t.sleep(10ms); });
-        t.schedule(1ms, [&] { n.cancel(); });
-        co_return join;
-    };
-
-    CATCH_CHECK(t.now() == 1ms);
-}
-
 CORRAL_TEST_CASE("exceptions") {
     auto bad = [&]() -> Task<> {
         co_await std::suspend_never();
@@ -1246,6 +1253,7 @@ CORRAL_TEST_CASE("nursery-exception") {
             Catch::Equals("boo!"));
     CATCH_CHECK(t.now() == 0ms);
 }
+#endif
 
 CORRAL_TEST_CASE("nursery-task-started") {
     CATCH_SECTION("start-await") {
@@ -1344,6 +1352,7 @@ CORRAL_TEST_CASE("nursery-task-started") {
         };
     }
 
+#if __cpp_exceptions
     CATCH_SECTION("exception") {
         CORRAL_WITH_NURSERY(n) {
             try {
@@ -1358,6 +1367,7 @@ CORRAL_TEST_CASE("nursery-task-started") {
             co_return join;
         };
     }
+#endif
 
     CATCH_SECTION("cancellation") {
         CORRAL_WITH_NURSERY(n) {
@@ -1864,6 +1874,7 @@ CORRAL_TEST_CASE("try-blocks") {
         return ScopeGuard([expected, checkStage] { checkStage(expected); });
     };
 
+#if __cpp_exceptions
     CATCH_SECTION("normal") {
         auto g3 = checkStageOnExit(3);
         CORRAL_TRY {
@@ -2133,6 +2144,7 @@ CORRAL_TEST_CASE("try-blocks") {
             };
         } catch (std::exception&) { checkStage(3); }
     }
+#endif
 
     CATCH_SECTION("cancellation") {
         auto g5 = checkStageOnExit(5);
@@ -2306,6 +2318,7 @@ CORRAL_TEST_CASE("frames") {
     co_return;
 }
 
+#if __cpp_exceptions
 struct ThrowingAwaitable {
     bool await_ready() const noexcept { return false; }
     void await_suspend(corral::Handle) { throw std::runtime_error("test"); }
@@ -2339,6 +2352,7 @@ CORRAL_TEST_CASE("throwing-awaitable") {
         CATCH_CHECK_THROWS(co_await aw);
     }
 }
+#endif
 
 CORRAL_TEST_CASE("bounded-channel") {
     Channel<int> channel{3};
@@ -2564,6 +2578,7 @@ CORRAL_TEST_CASE("sequence") {
         CATCH_CHECK(r == 43);
     }
 
+#if __cpp_exceptions
     CATCH_SECTION("exc1") {
         CATCH_CHECK_THROWS(co_await ([]() -> Task<> {
             co_await yield;
@@ -2583,6 +2598,7 @@ CORRAL_TEST_CASE("sequence") {
                                          throw std::runtime_error("test");
                                      })));
     }
+#endif
 
     CATCH_SECTION("cancel1") {
         auto [r, _] = co_await anyOf(t.sleep(3ms) | then([] {
@@ -2779,8 +2795,10 @@ CORRAL_TEST_CASE("nursery-custom-error-policy") {
 }
 
 CORRAL_TEST_CASE("combiners-custom-error-policy") {
+#if __cpp_exceptions
     static_assert(ApplicableErrorPolicy<UseExceptions, void>);
     static_assert(ApplicableErrorPolicy<UseExceptions, int>);
+#endif
     static_assert(ApplicableErrorPolicy<Infallible, void>);
     static_assert(ApplicableErrorPolicy<Infallible, int>);
 

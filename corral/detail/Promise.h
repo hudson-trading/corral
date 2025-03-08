@@ -387,8 +387,11 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
         }
         awaiter.await_set_executor(executor_);
 
+#if __cpp_exceptions
         try {
+#endif
             return detail::awaitSuspend(awaiter, proxyHandle());
+#if __cpp_exceptions
         } catch (...) {
             CORRAL_TRACE("pr %p: exception thrown from await_suspend", this);
             state_ = State::Running;
@@ -397,6 +400,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
             }
             throw;
         }
+#endif
     }
 
     /// Called during finalization.
