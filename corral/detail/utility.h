@@ -992,7 +992,7 @@ template <class T> class Result {
     {
         value_.template emplace<Value>(Storage<T>::wrap(std::forward<T>(t)));
     }
-    void storeSuccess()
+    void storeValue(Void)
         requires(std::is_same_v<T, void>)
     {
         value_.template emplace<Value>(Storage<T>::wrap());

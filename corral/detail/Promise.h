@@ -74,18 +74,7 @@ class BaseTaskParent {
 template <class T> class TaskParent : public BaseTaskParent {
   public:
     /// Called when task exited normally and returned a value.
-    virtual void storeValue(T) = 0;
-
-  protected:
-    ~TaskParent() = default;
-};
-
-/// An object that can serve as the parent of a task that returns void.
-/// See BaseTaskParent.
-template <> class TaskParent<void> : public BaseTaskParent {
-  public:
-    /// Called when task exited normally.
-    virtual void storeSuccess() = 0;
+    virtual void storeValue(InhabitedType<T>) = 0;
 
   protected:
     ~TaskParent() = default;
@@ -564,7 +553,7 @@ class Promise : public BasePromise, public ReturnValueMixin<T> {
 template <> class ReturnValueMixin<void> {
   public:
     void return_void() {
-        static_cast<Promise<void>*>(this)->parent()->storeSuccess();
+        static_cast<Promise<void>*>(this)->parent()->storeValue(Void{});
     }
 };
 

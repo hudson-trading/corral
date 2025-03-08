@@ -173,7 +173,7 @@ class Nursery : private detail::TaskParent<void> {
 
     /// TaskParent implementation
     Handle continuation(detail::BasePromise* promise) noexcept override;
-    void storeSuccess() override {}
+    void storeValue(detail::Void) override {}
     void storeException() override;
 
     void doCancel();
@@ -395,7 +395,7 @@ class Nursery::StartAwaiterBase : protected TaskParent<void>,
     void setCancelling() { executor_.setBits(Cancelling); }
 
   private:
-    void storeSuccess() override {
+    void storeValue(detail::Void) override {
         CORRAL_ASSERT(isCancelling() &&
                       "Nursery task completed without signalling readiness");
     }
@@ -538,7 +538,7 @@ void TaskStarted<Ret>::operator()()
     requires(std::is_same_v<Ret, void>)
 {
     if (auto p = std::exchange(parent_, nullptr)) {
-        p->result_.storeSuccess();
+        p->result_.storeValue({});
         p->handOff();
     }
 }

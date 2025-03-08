@@ -35,11 +35,14 @@
 
 namespace corral::detail {
 
-template <class T, class Self> class TaskAwaiterBase : private Noncopyable {
+/// An awaiter returned by `Task::operator co_await()`.
+/// co_await'ing on it runs the task, suspending the parent until it
+/// completes.
+template <class T>
+class TaskAwaiter final : public TaskParent<T>, private Noncopyable {
   public:
-    TaskAwaiterBase() noexcept : promise_(nullptr) {}
-    explicit TaskAwaiterBase(Promise<T>* promise) noexcept
-      : promise_(promise) {}
+    TaskAwaiter() noexcept : promise_(nullptr) {}
+    explicit TaskAwaiter(Promise<T>* promise) noexcept : promise_(promise) {}
 
     void await_set_executor(Executor* ex) noexcept {
         promise_->setExecutor(ex);
@@ -52,14 +55,14 @@ template <class T, class Self> class TaskAwaiterBase : private Noncopyable {
 
     bool await_ready() const noexcept {
         return promise_->checkImmediateResult(
-                const_cast<Self*>(static_cast<const Self*>(this)));
+                const_cast<TaskAwaiter<T>*>(this));
     }
 
     Handle await_suspend(Handle h) {
         CORRAL_TRACE("    ...pr %p", promise_);
         CORRAL_ASSERT(promise_);
         continuation_ = h;
-        return promise_->start(static_cast<Self*>(this), h);
+        return promise_->start(this, h);
     }
 
     bool await_cancel(Handle) noexcept {
@@ -72,6 +75,10 @@ template <class T, class Self> class TaskAwaiterBase : private Noncopyable {
         return false;
     }
 
+    T await_resume() && { return std::move(result_).value(); }
+
+    bool await_must_resume() const noexcept { return !result_.wasCancelled(); }
+
     void await_introspect(detail::TaskTreeCollector& c) const noexcept {
         if (!promise_) {
             c.node("<completed task>");
@@ -80,59 +87,26 @@ template <class T, class Self> class TaskAwaiterBase : private Noncopyable {
         promise_->await_introspect(c);
     }
 
-  protected:
-    Handle continuation() noexcept {
+  private:
+    // TaskParent implementation
+    void storeValue(InhabitedType<T> t) override {
+        result_.storeValue(std::forward<InhabitedType<T>>(t));
+    }
+    void storeException() override { result_.storeException(); }
+    void cancelled() override { result_.markCancelled(); }
+
+
+    Handle continuation(BasePromise*) noexcept override {
+        CORRAL_ASSERT(result_.completed() &&
+                      "task exited without co_return'ing a result");
         promise_ = nullptr;
         return continuation_;
     }
 
   private:
     Promise<T>* promise_;
-    Handle continuation_;
-};
-
-template <class T> class TaskResultStorage : public TaskParent<T> {
-  private:
-    void storeValue(T t) override { result_.storeValue(std::forward<T>(t)); }
-
-  protected:
     Result<T> result_;
-};
-
-template <> class TaskResultStorage<void> : public TaskParent<void> {
-  private:
-    void storeSuccess() override { result_.storeSuccess(); }
-
-  protected:
-    Result<void> result_;
-};
-
-/// An awaiter returned by `Task::operator co_await()`.
-/// co_await'ing on it runs the task, suspending the parent until it
-/// completes.
-template <class T>
-class TaskAwaiter final : public TaskResultStorage<T>,
-                          public TaskAwaiterBase<T, TaskAwaiter<T>> {
-    using Base = TaskAwaiterBase<T, TaskAwaiter<T>>;
-
-  public:
-    TaskAwaiter() = default;
-    explicit TaskAwaiter(Promise<T>* promise) : Base(promise) {}
-
-    T await_resume() && { return std::move(this->result_).value(); }
-    bool await_must_resume() const noexcept {
-        return !this->result_.wasCancelled();
-    }
-
-  private:
-    void storeException() override { this->result_.storeException(); }
-    void cancelled() override { this->result_.markCancelled(); }
-
-    Handle continuation(BasePromise*) noexcept override {
-        CORRAL_ASSERT(this->result_.completed() &&
-                      "task exited without co_return'ing a result");
-        return Base::continuation();
-    }
+    Handle continuation_;
 };
 
 template <class, class, class...> class TryBlock;

@@ -109,7 +109,7 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
         if constexpr (std::is_same_v<Lambda, Void>) {
             CORRAL_TRACE("   ...try-block %p, (%s; no-op)", this,
                          stageName(stage_));
-            storeSuccess();
+            storeValue(Void{});
             return continuation(nullptr);
         } else {
             try {
@@ -127,7 +127,7 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
         }
     }
 
-    void storeSuccess() override {
+    void storeValue(Void) override {
         if (stage_ == Stage::TRY || stage_ == Stage::CATCH) {
             completed_ = true;
             exception_ = nullptr;
