@@ -339,7 +339,7 @@ template <class Ret> class TaskStarted {
         return *this;
     }
 
-    void operator()(detail::ReturnType<Ret> ret)
+    void operator()(detail::InhabitedType<Ret> ret)
         requires(!std::is_same_v<Ret, void>);
 
     void operator()()
@@ -524,7 +524,7 @@ class Nursery::StartAwaiter : public StartAwaiterBase<Ret> {
 };
 
 template <class Ret>
-void TaskStarted<Ret>::operator()(detail::ReturnType<Ret> ret)
+void TaskStarted<Ret>::operator()(detail::InhabitedType<Ret> ret)
     requires(!std::is_same_v<Ret, void>)
 {
     if (auto p = std::exchange(parent_, nullptr)) {

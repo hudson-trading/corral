@@ -49,19 +49,26 @@ namespace corral {
 /// compile. This applies even if all awaitables return void, so one can use
 /// `std::get<N>(result).has_value()` to figure out which awaitable(s)
 /// completed.
-template <Awaitable... Ts> Awaitable auto anyOf(Ts&&... awaitables) {
+template <class Policy = detail::Unspecified, Awaitable... Ts>
+Awaitable auto anyOf(Ts&&... awaitables) {
     static_assert(
             sizeof...(Ts) == 0 ||
                     (detail::Cancellable<detail::AwaiterType<Ts>> || ...),
             "anyOf() makes no sense if all awaitables are non-cancellable");
 
-    return makeAwaitable<detail::AnyOf<Ts...>>(std::forward<Ts>(awaitables)...);
+    return makeAwaitable<detail::AnyOf<
+            detail::ChooseErrorPolicyForAwaitables<Policy, Ts...>, Ts...>>(
+            std::forward<Ts>(awaitables)...);
 }
 
 /// Same as above, but for variable-length ranges of awaitables.
 /// For similar reasons, returns a vector<Optional<R>>.
-template <AwaitableRange<> Range> Awaitable auto anyOf(Range&& range) {
-    return makeAwaitable<detail::AnyOfRange<Range>>(std::forward<Range>(range));
+template <class Policy = detail::Unspecified, AwaitableRange<> Range>
+Awaitable auto anyOf(Range&& range) {
+    using T = decltype(*std::begin(range));
+    return makeAwaitable<detail::AnyOfRange<
+            detail::ChooseErrorPolicyForAwaitables<Policy, T>, Range>>(
+            std::forward<Range>(range));
 }
 
 
@@ -75,14 +82,21 @@ template <AwaitableRange<> Range> Awaitable auto anyOf(Range&& range) {
 /// If cancellation occurs before all awaitables complete, the results
 /// of the awaitables that did complete before the cancellation may be
 /// discarded. If that's not desirable, use `corral::mostOf()` instead.
-template <Awaitable... Ts> Awaitable auto allOf(Ts&&... awaitables) {
-    return makeAwaitable<detail::AllOf<Ts...>>(std::forward<Ts>(awaitables)...);
+template <class Policy = detail::Unspecified, Awaitable... Ts>
+Awaitable auto allOf(Ts&&... awaitables) {
+    return makeAwaitable<detail::AllOf<
+            detail::ChooseErrorPolicyForAwaitables<Policy, Ts...>, Ts...>>(
+            std::forward<Ts>(awaitables)...);
 }
 
 /// Same as above, but for variable-length ranges of awaitables.
 /// Returns a vector<R>.
-template <AwaitableRange<> Range> Awaitable auto allOf(Range&& range) {
-    return makeAwaitable<detail::AllOfRange<Range>>(std::forward<Range>(range));
+template <class Policy = detail::DefaultErrorPolicy, AwaitableRange<> Range>
+Awaitable auto allOf(Range&& range) {
+    using T = decltype(*std::begin(range));
+    return makeAwaitable<detail::AllOfRange<
+            detail::ChooseErrorPolicyForAwaitables<Policy, T>, Range>>(
+            std::forward<Range>(range));
 }
 
 
@@ -96,14 +110,19 @@ template <AwaitableRange<> Range> Awaitable auto allOf(Range&& range) {
 /// Upon cancellation, proxies cancellation to all of the awaitables;
 /// if some of them complete before cancellation and others get cancelled,
 /// may return a partial result. Hence returns a std::tuple<Optional<R>...>.
-template <Awaitable... Ts> Awaitable auto mostOf(Ts&&... awaitables) {
-    return makeAwaitable<detail::MostOf<Ts...>>(
+template <class Policy = detail::DefaultErrorPolicy, Awaitable... Ts>
+Awaitable auto mostOf(Ts&&... awaitables) {
+    return makeAwaitable<detail::MostOf<
+            detail::ChooseErrorPolicyForAwaitables<Policy, Ts...>, Ts...>>(
             std::forward<Ts>(awaitables)...);
 }
 
 /// Same as above, but for variable-length ranges of awaitables.
-template <AwaitableRange<> Range> Awaitable auto mostOf(Range&& range) {
-    return makeAwaitable<detail::MostOfRange<Range>>(
+template <class Policy = detail::DefaultErrorPolicy, AwaitableRange<> Range>
+Awaitable auto mostOf(Range&& range) {
+    using T = decltype(*std::begin(range));
+    return makeAwaitable<detail::MostOfRange<
+            detail::ChooseErrorPolicyForAwaitables<Policy, T>, Range>>(
             std::forward<Range>(range));
 }
 

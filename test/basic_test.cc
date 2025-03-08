@@ -183,7 +183,76 @@ class TestEventLoop {
     milliseconds now_ = 0ms;
 };
 
+
+// A small makeshift equivalent for `std::expected<T, int /*errno*/>`.
+struct MyError {
+    int err;
+    bool operator==(const MyError& rhs) const = default;
+    friend std::ostream& operator<<(std::ostream& os, const MyError& e) {
+        return os << "ERR#" << e.err;
+    }
+};
+template <class T = void> class MyResult;
+template <class T> class MyResult {
+  public:
+    explicit(false) MyResult(T t) : held_(std::forward<T>(t)) {}
+    explicit(false) MyResult(MyError e) : held_(e) {}
+    explicit operator bool() const { return held_.index() == 0; }
+    MyError error() const { return std::get<1>(held_); }
+    bool operator==(const MyResult& other) const = default;
+    T& operator*() & {
+        CATCH_REQUIRE(!!*this);
+        return std::get<0>(held_);
+    }
+    T&& operator*() && {
+        CATCH_REQUIRE(!!*this);
+        return std::get<0>(std::move(held_));
+    }
+
+  private:
+    std::variant<T, MyError> held_;
+};
+template <> class MyResult<void> {
+  public:
+    constexpr MyResult() : err_(0) {}
+    explicit(false) MyResult(MyError e) : err_(e.err) {}
+    explicit operator bool() const { return err_ == 0; }
+    MyError error() const { return MyError{err_}; }
+    bool operator==(const MyResult& other) const = default;
+    void operator*() const { CATCH_CHECK(!!*this); }
+
+  private:
+    int err_;
+};
+static constexpr const MyResult<void> OK = {};
+
+struct MyErrorPolicy {
+    using ErrorType = MyError;
+    static MyError fromCurrentException() { CORRAL_ASSERT_UNREACHABLE(); }
+    static MyError unwrapError(const auto& v) {
+        return v ? MyError{} : v.error();
+    }
+    static bool hasError(MyError e) { return e.err != 0; }
+    template <class T> static auto unwrapValue(T v) { return *v; }
+    template <class T> static MyResult<T> wrapValue(T t) {
+        return std::forward<T>(t);
+    }
+    static MyResult<void> wrapValue() { return OK; }
+    static MyError wrapError(MyError e) { return e; }
+    static void terminateBy(MyError e) {
+        fprintf(stderr, "%s\n", strerror(e.err));
+        std::terminate();
+    }
+};
+
+static_assert(corral::ApplicableErrorPolicy<MyErrorPolicy, MyResult<void>>);
+static_assert(corral::ApplicableErrorPolicy<MyErrorPolicy, MyResult<int>>);
+
 namespace corral {
+template <class T> struct UseErrorPolicy<MyResult<T>> {
+    using Type = MyErrorPolicy;
+};
+
 template <> struct EventLoopTraits<TestEventLoop> {
     static EventLoopID eventLoopID(TestEventLoop& p) noexcept {
         return EventLoopID(&p);
@@ -345,13 +414,16 @@ CORRAL_TEST_CASE("anyof") {
         CATCH_CHECK(!c);
     }
 
-    CATCH_SECTION("return-ref") {
+    CATCH_SECTION("return-lref") {
         int x = 42;
         auto [lx, s1] = co_await anyOf([&]() -> Task<int&> { co_return x; },
                                        t.sleep(2ms));
         CATCH_CHECK(&*lx == &x);
         CATCH_CHECK(!s1);
+    }
 
+    CATCH_SECTION("return-rref") {
+        int x = 42;
         auto [rx, s2] = co_await anyOf(
                 [&]() -> Task<int&&> { co_return std::move(x); }, t.sleep(2ms));
         CATCH_CHECK(&*rx == &x);
@@ -2574,6 +2646,93 @@ CORRAL_TEST_CASE("sequence") {
         CATCH_CHECK(r == 42);
         r = co_await (noop() | then([] { return RValueQualified{}; }));
         CATCH_CHECK(r == 42);
+    }
+}
+
+CORRAL_TEST_CASE("combiners-custom-error-policy") {
+    static_assert(ApplicableErrorPolicy<UseExceptions, void>);
+    static_assert(ApplicableErrorPolicy<UseExceptions, int>);
+    static_assert(ApplicableErrorPolicy<Infallible, void>);
+    static_assert(ApplicableErrorPolicy<Infallible, int>);
+
+    CATCH_SECTION("anyof-success") {
+        MyResult<std::tuple<std::optional<int>, std::optional<int>>> r =
+                co_await anyOf(
+                        [&]() -> Task<MyResult<int>> {
+                            co_await t.sleep(1ms);
+                            co_return 42;
+                        },
+                        [&]() -> Task<MyResult<int>> {
+                            co_await t.sleep(2ms);
+                            CATCH_CHECK(!"should never reach here");
+                            co_return -1;
+                        });
+        CATCH_REQUIRE(r);
+        auto [a, b] = *r;
+
+        CATCH_CHECK(*a == 42);
+        CATCH_CHECK(!b);
+    }
+
+    CATCH_SECTION("anyof-error") {
+        auto r = co_await anyOf(
+                [&]() -> Task<MyResult<int>> {
+                    co_await t.sleep(1ms);
+                    co_return MyError{EINVAL};
+                },
+                [&]() -> Task<MyResult<int>> {
+                    co_await t.sleep(2ms);
+                    co_return 42;
+                });
+        CATCH_CHECK(r == MyError{EINVAL});
+    }
+
+    CATCH_SECTION("anyof-range") {
+        std::vector<Task<MyResult<int>>> tasks;
+        auto body = [&](int d) -> Task<MyResult<int>> {
+            co_await t.sleep(std::chrono::milliseconds(d));
+            co_return d + 10;
+        };
+        for (int i = 0; i < 3; i++) {
+            tasks.push_back(body(i));
+        }
+        MyResult<std::vector<std::optional<int>>> res = co_await anyOf(tasks);
+        CATCH_REQUIRE(res);
+        auto& v = *res;
+        CATCH_CHECK(*v[0] == 10);
+        CATCH_CHECK(!v[1]);
+        CATCH_CHECK(!v[2]);
+    }
+
+    CATCH_SECTION("allof-success") {
+        MyResult<std::tuple<int, int>> r = co_await allOf(
+                [&]() -> Task<MyResult<int>> {
+                    co_await t.sleep(1ms);
+                    co_return 42;
+                },
+                [&]() -> Task<MyResult<int>> {
+                    co_await t.sleep(2ms);
+                    co_return 43;
+                });
+        CATCH_REQUIRE(r);
+        auto [a, b] = *r;
+
+        CATCH_CHECK(a == 42);
+        CATCH_CHECK(b == 43);
+    }
+
+    CATCH_SECTION("allof-error") {
+        auto r = co_await allOf(
+                [&]() -> Task<MyResult<int>> {
+                    co_await t.sleep(1ms);
+                    co_return MyError{EINVAL};
+                },
+                [&]() -> Task<MyResult<int>> {
+                    co_await t.sleep(2ms);
+                    CATCH_CHECK(!"should never reach here");
+                    co_return 42;
+                });
+        CATCH_CHECK(r == MyError{EINVAL});
     }
 }
 

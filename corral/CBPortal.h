@@ -416,6 +416,7 @@ class CBPortalProxy : private detail::Noncopyable {
                                          CBPortals>::PortalType...>>&,
             detail::AwaiterMaker<
                     detail::AnyOf<
+                            Infallible,
                             typename CBPortalTraits<CBPortals>::PortalType&...>,
                     typename CBPortalTraits<CBPortals>::PortalType&...>>;
 

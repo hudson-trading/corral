@@ -28,6 +28,7 @@
 #include <utility>
 #include <version>
 
+#include "../ErrorPolicy.h"
 #include "../concepts.h"
 #include "../config.h"
 #include "../defs.h"
@@ -576,11 +577,11 @@ template <class T> decltype(auto) getAwaiter(T&& t) {
 struct Void {};
 
 template <class T>
-using ReturnType = std::conditional_t<std::is_same_v<T, void>, Void, T>;
+using InhabitedType = std::conditional_t<std::is_same_v<T, void>, Void, T>;
 
 template <class Aw>
 using AwaitableReturnType =
-        ReturnType<decltype(std::declval<AwaiterType<Aw>>().await_resume())>;
+        InhabitedType<decltype(std::declval<AwaiterType<Aw>>().await_resume())>;
 
 /// An adapter which extracts the awaiter from an awaitable
 /// and sanitizes it in these ways:
@@ -908,22 +909,18 @@ template <class Callable> class AsCoroutineHandle : public CoroutineFrame {
     [[no_unique_address]] Callable callable_;
 };
 
-/// Has member field `value` that resolves to `true` if T is a template
-/// instantiation of Template, and `false` otherwise.
-template <template <typename...> typename Template, typename T>
-struct is_specialization_of : std::false_type {};
 
-template <template <typename...> typename Template, typename... Args>
-struct is_specialization_of<Template, Template<Args...>> : std::true_type {};
-
-template <template <typename...> typename Template, typename T>
-constexpr inline bool is_specialization_of_v =
-        is_specialization_of<Template, T>::value;
-
-template <typename T>
-constexpr bool is_reference_wrapper_v =
-        is_specialization_of_v<std::reference_wrapper, T>;
-
+template <class Policy, Awaitable... Aw>
+struct ChooseErrorPolicyForAwaitablesImpl {
+    using Type = Policy;
+};
+template <Awaitable... Aw>
+struct ChooseErrorPolicyForAwaitablesImpl<Unspecified, Aw...> {
+    using Type = DetectErrorPolicy<AwaitableReturnType<Aw>...>;
+};
+template <class Policy, Awaitable... Aw>
+using ChooseErrorPolicyForAwaitables =
+        typename ChooseErrorPolicyForAwaitablesImpl<Policy, Aw...>::Type;
 
 // CallableSignature<Fn> is a structure containing the following alias
 // declarations:
@@ -990,7 +987,7 @@ struct CallableSignature : CallableSignature<decltype(&Fn::operator())> {
 /// (a value of type T, or an exception, or confirmed cancellation).
 template <class T> class Result {
   public:
-    void storeValue(ReturnType<T> t)
+    void storeValue(InhabitedType<T> t)
         requires(!std::is_same_v<T, void>)
     {
         value_.template emplace<Value>(Storage<T>::wrap(std::forward<T>(t)));

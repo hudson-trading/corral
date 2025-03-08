@@ -106,3 +106,28 @@ template <class Promise> using CoroutineHandle = std::coroutine_handle<Promise>;
 #define CORRAL_ENTER_ASYNC_UNIVERSE                                            \
     std::monostate {}
 #endif
+
+
+// You may define CORRAL_DEFAULT_ERROR_POLICY to provide a custom error
+// propagation policy in codebases where C++ exceptions are unavailable
+// or disallowed.
+// This alters behavior of nurseries and anyOf()/allOf()/mostOf() combiners.
+#ifdef CORRAL_DEFAULT_ERROR_POLICY
+namespace corral::detail {
+using DefaultErrorPolicy = CORRAL_DEFAULT_ERROR_POLICY;
+}
+#elif __cpp_exceptions
+namespace corral {
+class UseExceptions;
+namespace detail {
+using DefaultErrorPolicy = UseExceptions;
+}
+} // namespace corral
+#else
+namespace corral {
+struct Infallible;
+namespace detail {
+using DefaultErrorPolicy = Infallible;
+}
+} // namespace corral
+#endif

@@ -28,6 +28,7 @@
 #include <utility>
 
 #include "defs.h"
+#include "detail/concept_helpers.h"
 
 namespace corral {
 class Executor;
@@ -41,15 +42,6 @@ class TaskTreeCollector;
 // Required internally to circumvent certain out-of-order definitions
 // of `operator co_await()`.
 template <class T, class Ret> constexpr bool ThisIsAwaitableTrustMe = false;
-
-struct Unspecified {};
-
-// Utility helpers for concepts below.
-template <class From, class... To>
-concept convertible_to_any = (std::convertible_to<From, To> || ...);
-
-template <class From, class... To>
-concept same_as_any = (std::same_as<From, To> || ...);
 
 } // namespace detail
 
