@@ -29,6 +29,7 @@
 #include "detail/ABI.h"
 #include "detail/IntrusiveList.h"
 #include "detail/IntrusivePtr.h"
+#include "detail/Optional.h"
 #include "detail/utility.h"
 
 namespace corral {
@@ -62,10 +63,12 @@ template <class Awaitable> class Shared {
     using WrappedAwaiter = detail::AwaiterType<Awaitable&>;
     using ReturnType = decltype(std::declval<WrappedAwaiter>().await_resume());
     using ConstRef = std::add_lvalue_reference_t<const ReturnType>;
+    using OptionalRef = Optional<ConstRef>;
     using Storage = detail::Storage<ReturnType>;
 
     class State;
-    class Awaiter;
+    class AwaiterBase;
+    template <class Ret> class Awaiter;
 
   public:
     Shared() = default;
@@ -83,15 +86,23 @@ template <class Awaitable> class Shared {
 
     corral::Awaiter auto operator co_await();
 
+    /// The above awaitable may trigger an assert if all other
+    /// awaiting parents were cancelled, thus propagating cancellation
+    /// to the shared awaitable (since there's no way to construct
+    /// any meaningful return value). This function may be used
+    /// to handle such cases, in which it will return an empty optional.
+    corral::Awaitable auto asOptional();
+
   private:
     detail::IntrusivePtr<State> state_;
 };
 
 /// Awaiter object used for a single co_await on a shared task
 template <class Awaitable>
-class Shared<Awaitable>::Awaiter : public detail::IntrusiveListItem<Awaiter> {
+class Shared<Awaitable>::AwaiterBase
+  : public detail::IntrusiveListItem<AwaiterBase> {
   public:
-    explicit Awaiter(detail::IntrusivePtr<State> state)
+    explicit AwaiterBase(detail::IntrusivePtr<State> state)
       : state_(std::move(state)) {}
 
     bool await_ready() const noexcept;
@@ -100,7 +111,6 @@ class Shared<Awaitable>::Awaiter : public detail::IntrusiveListItem<Awaiter> {
     Handle await_suspend(Handle h);
     auto await_cancel(Handle h) noexcept;
     auto await_must_resume() const noexcept;
-    ConstRef await_resume();
     void await_introspect(auto& c) const noexcept;
 
   private:
@@ -110,13 +120,21 @@ class Shared<Awaitable>::Awaiter : public detail::IntrusiveListItem<Awaiter> {
     }
     friend class State;
 
-  private:
+  protected:
     // The shared task state. If null, this awaitable is not associated
     // with any shared task; this can occur when awaiting a moved-from
     // Shared, or after cancellation of an awaitable that is not the last
     // one for its task.
     detail::IntrusivePtr<State> state_;
     Handle parent_;
+};
+
+template <class Awaitable>
+template <class Ret>
+class Shared<Awaitable>::Awaiter : public Shared<Awaitable>::AwaiterBase {
+  public:
+    using Awaiter::AwaiterBase::AwaiterBase;
+    Ret await_resume();
 };
 
 //
@@ -133,12 +151,12 @@ class Shared<Awaitable>::State : private detail::ProxyFrame,
     bool closed() const noexcept { return result_.index() >= Cancelling; }
 
     bool ready() const noexcept;
-    auto earlyCancel(Awaiter* ptr) noexcept;
+    auto earlyCancel(AwaiterBase* ptr) noexcept;
     void setExecutor(Executor* ex) noexcept;
-    Handle suspend(Awaiter* ptr);
-    auto cancel(Awaiter* ptr) noexcept;
+    Handle suspend(AwaiterBase* ptr);
+    auto cancel(AwaiterBase* ptr) noexcept;
     auto mustResume() const noexcept;
-    ConstRef result();
+    template <class Ret> Ret resultAs();
     void introspect(auto& c) const noexcept;
 
   private:
@@ -150,7 +168,7 @@ class Shared<Awaitable>::State : private detail::ProxyFrame,
   private:
     [[no_unique_address]] Awaitable awaitable_;
     detail::SanitizedAwaiter<Awaitable&> awaiter_;
-    detail::IntrusiveList<Awaiter> parents_;
+    detail::IntrusiveList<AwaiterBase> parents_;
     std::variant<std::monostate,
                  std::monostate,
                  typename Storage::Type,
@@ -194,7 +212,7 @@ bool Shared<Awaitable>::State::ready() const noexcept {
 }
 
 template <class Awaitable>
-auto Shared<Awaitable>::State::earlyCancel(Awaiter* ptr) noexcept {
+auto Shared<Awaitable>::State::earlyCancel(AwaiterBase* ptr) noexcept {
     // The first arriving parent is considered to be responsible for
     // forwarding early cancellation to the shared task. Any parent
     // that arrives after it can safely be skipped without affecting the
@@ -225,7 +243,7 @@ auto Shared<Awaitable>::State::earlyCancel(Awaiter* ptr) noexcept {
 }
 
 template <class Awaitable>
-Handle Shared<Awaitable>::State::suspend(Awaiter* ptr) {
+Handle Shared<Awaitable>::State::suspend(AwaiterBase* ptr) {
     CORRAL_TRACE("    ...on shared awaitable %p (holding %p)", this, &awaiter_);
     bool isFirst = parents_.empty();
     parents_.push_back(*ptr);
@@ -254,7 +272,8 @@ Handle Shared<Awaitable>::State::suspend(Awaiter* ptr) {
 }
 
 template <class Awaitable>
-typename Shared<Awaitable>::ConstRef Shared<Awaitable>::State::result() {
+template <class Ret>
+Ret Shared<Awaitable>::State::resultAs() {
     // We can get here with result == CancelPending if early-cancel returned
     // false and the awaitable was then immediately ready. mustResume()
     // was checked already, so treat CancelPending like Incomplete.
@@ -273,9 +292,16 @@ typename Shared<Awaitable>::ConstRef Shared<Awaitable>::State::result() {
     }
 
     if (result_.index() == Value) [[likely]] {
-        return Storage::unwrapCRef(std::get<Value>(result_));
+        if constexpr (std::is_same_v<Ret, OptionalRef> &&
+                      std::is_void_v<ConstRef>) {
+            return OptionalRef(std::in_place);
+        } else {
+            return Storage::unwrapCRef(std::get<Value>(result_));
+        }
     } else if (result_.index() == Exception) {
         std::rethrow_exception(std::get<Exception>(result_));
+    } else if constexpr (std::is_same_v<Ret, OptionalRef>) {
+        return std::nullopt;
     } else {
         // We get here if a new parent tries to join the shared operation
         // after all of its existing parents were cancelled and
@@ -283,16 +309,17 @@ typename Shared<Awaitable>::ConstRef Shared<Awaitable>::State::result() {
         // called suspend() so we don't have to worry about removing
         // it from the list of parents. We can't propagate the
         // cancellation in a different context than the context that
-        // was cancelled, so we throw an exception instead.
-        throw std::runtime_error(
-                "Shared task was cancelled because all of its parent "
-                "tasks were previously cancelled, so there is no "
-                "value for new arrivals to retrieve");
+        // was cancelled, so assert instead.
+        CORRAL_ASSERT(
+                !"tasks were previously cancelled, so there is "
+                 "no value for new arrivals to retrieve "
+                 "(try `co_await shared.asOptional()` to guard against this)");
+        CORRAL_ASSERT_UNREACHABLE();
     }
 }
 
 template <class Awaitable>
-auto Shared<Awaitable>::State::cancel(Awaiter* ptr) noexcept {
+auto Shared<Awaitable>::State::cancel(AwaiterBase* ptr) noexcept {
     if (parents_.contains_one_item()) {
         CORRAL_TRACE("cancelling shared awaitable %p (holding %p); "
                      "forwarding cancellation",
@@ -404,53 +431,53 @@ template <class Awaitable> void Shared<Awaitable>::State::invoke() {
 }
 
 template <class Awaitable>
-void Shared<Awaitable>::Awaiter::await_set_executor(Executor* ex) noexcept {
+void Shared<Awaitable>::AwaiterBase::await_set_executor(Executor* ex) noexcept {
     if (state_) {
         state_->setExecutor(ex);
     }
 }
 
 template <class Awaitable>
-bool Shared<Awaitable>::Awaiter::await_ready() const noexcept {
+bool Shared<Awaitable>::AwaiterBase::await_ready() const noexcept {
     return !state_ || state_->ready();
 }
 
 template <class Awaitable>
-auto Shared<Awaitable>::Awaiter::await_early_cancel() noexcept {
+auto Shared<Awaitable>::AwaiterBase::await_early_cancel() noexcept {
     return state_ ? state_->earlyCancel(this) : std::true_type{};
 }
 
 template <class Awaitable>
-Handle Shared<Awaitable>::Awaiter::await_suspend(Handle h) {
+Handle Shared<Awaitable>::AwaiterBase::await_suspend(Handle h) {
     parent_ = h;
     return state_->suspend(this);
 }
 
 template <class Awaitable>
-typename Shared<Awaitable>::ConstRef //
-Shared<Awaitable>::Awaiter::await_resume() {
-    if (!state_) {
-        if constexpr (std::is_same_v<ReturnType, void>) {
+template <class Ret>
+Ret Shared<Awaitable>::Awaiter<Ret>::await_resume() {
+    if (!this->state_) {
+        if constexpr (std::is_same_v<Ret, void>) {
             return;
         } else {
             CORRAL_ASSERT(!"co_await on an empty shared");
         }
     }
-    return state_->result();
+    return this->state_->template resultAs<Ret>();
 }
 
 template <class Awaitable>
-auto Shared<Awaitable>::Awaiter::await_cancel(Handle) noexcept {
+auto Shared<Awaitable>::AwaiterBase::await_cancel(Handle) noexcept {
     return state_ ? state_->cancel(this) : std::true_type{};
 }
 
 template <class Awaitable>
-auto Shared<Awaitable>::Awaiter::await_must_resume() const noexcept {
+auto Shared<Awaitable>::AwaiterBase::await_must_resume() const noexcept {
     return state_ ? state_->mustResume() : std::false_type{};
 }
 
 template <class Awaitable>
-void Shared<Awaitable>::Awaiter::await_introspect(auto& c) const noexcept {
+void Shared<Awaitable>::AwaiterBase::await_introspect(auto& c) const noexcept {
     c.node("Shared::Awaiter");
     if (state_) {
         state_->introspect(c);
@@ -479,7 +506,12 @@ template <class Awaitable> Awaitable* Shared<Awaitable>::get() const {
 
 template <class Awaitable> //
 corral::Awaiter auto Shared<Awaitable>::operator co_await() {
-    return Awaiter(state_);
+    return Awaiter<ConstRef>(state_);
+}
+
+template <class Awaitable> //
+corral::Awaitable auto Shared<Awaitable>::asOptional() {
+    return makeAwaitable<Awaiter<OptionalRef>>(state_);
 }
 
 } // namespace corral

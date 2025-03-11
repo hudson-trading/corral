@@ -30,6 +30,7 @@
 #include "../Task.h"
 #include "../concepts.h"
 #include "../config.h"
+#include "Optional.h"
 #include "PointerBits.h"
 #include "Promise.h"
 #include "frames.h"

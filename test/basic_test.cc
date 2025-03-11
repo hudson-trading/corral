@@ -1560,6 +1560,35 @@ CORRAL_TEST_CASE("shared-no-cancel") {
     co_await allOf(first, second);
 }
 
+CORRAL_TEST_CASE("shared-cancel-wait") {
+    CATCH_SECTION("int") {
+        auto shared = Shared([&]() -> Task<int> {
+            co_await t.sleep(5ms, noncancellable);
+            co_await t.sleep(5ms);
+            co_return 42;
+        });
+
+        co_await allOf(anyOf(shared, t.sleep(3ms)), [&]() -> Task<> {
+            co_await t.sleep(4ms);
+            auto res = co_await shared.asOptional();
+            CATCH_CHECK(!res);
+        });
+    }
+
+    CATCH_SECTION("void") {
+        auto shared = Shared([&]() -> Task<> {
+            co_await t.sleep(5ms, noncancellable);
+            co_await t.sleep(5ms);
+        });
+
+        co_await allOf(anyOf(shared, t.sleep(3ms)), [&]() -> Task<> {
+            co_await t.sleep(4ms);
+            auto res = co_await shared.asOptional();
+            CATCH_CHECK(!res);
+        });
+    }
+}
+
 CORRAL_TEST_CASE("shared-cancel-self") {
     auto shared = Shared([&]() -> Task<> { co_await t.sleep(5ms); });
     auto parent = [&]() -> Task<void> { co_await shared; };

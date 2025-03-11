@@ -66,8 +66,10 @@ struct TaskTag {};
 
 /// Like std::conditional, but for templates.
 template <bool If,
-          template <class...> class Then,
-          template <class...> class Else>
+          template <class...>
+          class Then,
+          template <class...>
+          class Else>
 struct ConditionalTmpl {
     template <class... Args> using With = Then<Args...>;
 };
@@ -829,48 +831,6 @@ template <> struct Storage<void> {
     static void unwrapCRef(Type) {}
 };
 
-/// A wrapper wrapping a pointer to a std::optional<Ref>-like interface.
-template <class T>
-    requires(std::is_reference_v<T>)
-class OptionalRef {
-    using Pointee = std::remove_reference_t<T>;
-
-  public:
-    OptionalRef() noexcept : ptr_(nullptr) {}
-    OptionalRef(T value) noexcept : ptr_(&value) {}
-    OptionalRef(std::nullopt_t) noexcept : ptr_(nullptr) {}
-
-    bool has_value() const noexcept { return ptr_ != nullptr; }
-    explicit operator bool() const noexcept { return ptr_ != nullptr; }
-
-    Pointee& operator*() noexcept { return *ptr_; }
-    const Pointee& operator*() const noexcept { return *ptr_; }
-
-    Pointee* operator->() noexcept { return ptr_; }
-    const Pointee* operator->() const noexcept { return ptr_; }
-
-    Pointee& value() { return ref(); }
-    const Pointee& value() const { return ref(); }
-
-    template <class U> Pointee value_or(U&& def) const {
-        return has_value() ? *ptr_ : static_cast<Pointee>(std::forward<U>(def));
-    }
-
-    void reset() noexcept { ptr_ = nullptr; }
-    void swap(OptionalRef& other) noexcept { std::swap(ptr_, other.ptr_); }
-
-  private:
-    Pointee& ref() const {
-        if (has_value()) {
-            return *ptr_;
-        } else {
-            throw std::bad_optional_access();
-        }
-    }
-
-  private:
-    Pointee* ptr_;
-};
 
 template <std::output_iterator<uintptr_t> OutIter>
 OutIter collectAsyncStackTrace(Handle h, OutIter out) {
@@ -1051,14 +1011,5 @@ Handle asCoroutineHandle(Callable&& c) {
     return (new detail::AsCoroutineHandle<Callable>(std::forward<Callable>(c)))
             ->toHandle();
 }
-
-template <class T>
-using Optional =
-        typename detail::ConditionalTmpl<std::is_reference_v<T>,
-                                         detail::OptionalRef,
-                                         std::optional>::template With<T>;
-// Note: cannot use std::conditional_t<..., OptionalRef<T>> because it would
-// instantiate both branches before checking the condition, and OptionalRef<T>
-// would fail instantiation for non-references.
 
 } // namespace corral

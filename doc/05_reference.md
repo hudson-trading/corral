@@ -533,6 +533,7 @@ class Shared {
     bool closed() const noexcept;
 
     Awaitable auto operator co_await();
+    Awaitable auto asOptional();
 };
 ```
 
@@ -559,7 +560,16 @@ types are also supported.
   Cancellation of this awaitable succeeds immediately and has no
   effect on the shared task if there are other awaiting tasks still active.
   Cancellation of the last awaiting task will cancel the shared task
-  and wait for it to complete.
+  and wait for it to complete. If more awaiters join the shared task
+  after the decision to cancel it has already been made, they will
+  cause an assertion failure since there is no way to construct a
+  return value for them to use. Use `asOptional()` to guard against
+  this possiblity.
+
+* `Awaitable auto Shared<T>::asOptional()`
+  : Same as above, except that if the decision to cancel the shared
+  task was made before this awaiter started awaiting, it will receive
+  a result of `std::nullopt` instead of an assertion failure.
 
 ### Value<T>
 
