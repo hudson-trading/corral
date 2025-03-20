@@ -519,7 +519,7 @@ corral::Awaiter auto Shared<Awaitable>::operator co_await() {
 
 template <class Awaitable> //
 corral::Awaitable auto Shared<Awaitable>::asOptional() {
-    return makeAwaitable<Awaiter<OptionalRef>>(state_);
+    return makeAwaitable<Awaiter<OptionalRef>>(std::ref(state_));
 }
 
 } // namespace corral

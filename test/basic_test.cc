@@ -439,6 +439,14 @@ CORRAL_TEST_CASE("anyof") {
         co_await anyOf(Ready{}, [&]() -> Task<> { co_await t.sleep(1ms); });
         CATCH_CHECK(t.now() == 0ms);
     }
+
+    CATCH_SECTION("take-lref") {
+        LValueQualifiedImm a;
+        LValueQualified b;
+        auto [ra, rb] = co_await allOf(a, b);
+        CATCH_CHECK(ra == 42);
+        CATCH_CHECK(rb == 42);
+    }
 }
 
 CORRAL_TEST_CASE("mostof") {
@@ -2911,6 +2919,16 @@ CORRAL_TEST_CASE("co_try") {
     vres = co_await voidBody(
             []() -> MyResult<void> { return MyError{EINVAL}; });
     CATCH_CHECK(vres == MyError{EINVAL});
+}
+
+CORRAL_TEST_CASE("make-awaitable") {
+    auto sleep = [&](std::chrono::milliseconds delay) {
+        return makeAwaitable<TestEventLoop::Sleep</*Cancelable = */ true>>(
+                std::ref(t), delay);
+    };
+
+    co_await anyOf(sleep(10ms), sleep(20ms));
+    CATCH_CHECK(t.now() == 10ms);
 }
 
 } // namespace

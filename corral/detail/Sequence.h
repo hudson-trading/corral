@@ -246,8 +246,8 @@ template <class ThenFn> class SequenceBuilder {
                  std::invocable<ThenFn, AwaitableReturnType<First> &&> ||
                  std::invocable<ThenFn>)
     friend auto operator|(First&& first, SequenceBuilder&& builder) {
-        return makeAwaitable<Sequence<First, ThenFn>>(
-                std::forward<First>(first), std::move(builder.fn_));
+        return makeAwaitable<Sequence<First, ThenFn>, First, ThenFn>(
+                std::forward<First>(first), std::forward<ThenFn>(builder.fn_));
     }
 
     // Allow right associativity of SequenceBuilder's

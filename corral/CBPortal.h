@@ -612,15 +612,18 @@ auto untilCBCalled(InitiateFn&& initiateFn,
     using Portal = CBPortal<PortalArgs...>;
     using Ret = detail::CBPortalProxy<InitiateFn, detail::DoNothing, Portal&,
                                       MorePortals&...>;
-    return makeAwaitable<Ret>(std::forward<InitiateFn>(initiateFn),
-                              detail::DoNothing{}, portal, morePortals...);
+    return makeAwaitable<Ret, InitiateFn, detail::DoNothing, Portal&,
+                         MorePortals&...>(std::forward<InitiateFn>(initiateFn),
+                                          detail::DoNothing{}, portal,
+                                          morePortals...);
 }
 
 template <class InitiateFn, std::invocable<> CancelFn>
 auto untilCBCalled(InitiateFn&& initiateFn, CancelFn&& cancelFn) {
     using Ret = detail::PortalProxyTypeFor<InitiateFn, CancelFn>;
-    return makeAwaitable<Ret>(std::forward<InitiateFn>(initiateFn),
-                              std::forward<CancelFn>(cancelFn));
+    return makeAwaitable<Ret, InitiateFn, CancelFn>(
+            std::forward<InitiateFn>(initiateFn),
+            std::forward<CancelFn>(cancelFn));
 }
 
 template <class InitiateFn> auto untilCBCalled(InitiateFn&& initiateFn) {

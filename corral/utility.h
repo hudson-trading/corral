@@ -114,8 +114,12 @@ template <std::output_iterator<uintptr_t> OutIter> class AsyncStackTrace {
 /// The returned class is moveable (assuming the arguments are moveable),
 /// and has a one-shot `operator co_await() &&`, which will construct
 /// `T(forward<Args>(args...))` and return it.
-template <Awaiter T, class... Args>
-Awaitable auto makeAwaitable(Args&&... args) {
+///
+/// Note: makeAwaitable() takes its arguments by value (since passing
+/// references may easily lead to dangling references). To pass a reference,
+/// either use `std::ref()` (or `std::cref()`) or provide explicit template
+/// arguments.
+template <Awaiter T, class... Args> Awaitable auto makeAwaitable(Args... args) {
     return detail::AwaiterMaker<T, Args...>(std::forward<Args>(args)...);
 }
 
