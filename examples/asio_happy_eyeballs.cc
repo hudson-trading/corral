@@ -45,14 +45,15 @@ corral::Task<std::optional<tcp::socket>> happy_eyeballs_connect(
         std::ranges::range auto endpoints,
         boost::posix_time::milliseconds delay) {
     std::optional<tcp::socket> result;
-    corral::Value<size_t> current{0};  // A barrier for individual connection tasks.
-                                       // If K is stored, connections to [0,K] may be attempted.
+    corral::Value<size_t> current{0}; // A barrier for individual connection
+                                      // tasks. If K is stored, connections
+                                      // to [0,K] may be attempted.
     size_t remaining = 0;
 
     CORRAL_WITH_NURSERY(nursery) {
         auto try_connect = [&](size_t idx,
                                tcp::endpoint addr) -> corral::Task<void> {
-            auto kickOffNext = [&] {
+            auto kickOffNext = [&current, idx] {
                 current = std::max<size_t>(current, idx + 1);
             };
 
@@ -61,7 +62,7 @@ corral::Task<std::optional<tcp::socket>> happy_eyeballs_connect(
 
             // Start the connection attempt in background
             // (as we don't want it cancelled after `delay`).
-            nursery.start([&, addr]() -> corral::Task<void> {
+            nursery.start([&, addr, kickOffNext]() -> corral::Task<void> {
                 tcp::socket sock(io_service);
                 std::cout << "trying " << addr << "...\n";
                 auto ec = co_await sock.async_connect(
@@ -72,9 +73,10 @@ corral::Task<std::optional<tcp::socket>> happy_eyeballs_connect(
                     result.emplace(std::move(sock));
                     nursery.cancel();
                 } else if (remaining--) {
-                    kickOffNext(); // If next endpoint is still pending, start it.
-                                   // Note this may execute out of order, so `max()`
-                                   // call is necessary in `kickOffNext()`.
+                    // If next endpoint is still pending, start it.
+                    // Note this may execute out of order, so `max()` call
+                    // is necessary in `kickOffNext()`.
+                    kickOffNext();
                 } else {
                     nursery.cancel(); // no more endpoints to try
                 }
@@ -82,8 +84,8 @@ corral::Task<std::optional<tcp::socket>> happy_eyeballs_connect(
 
             // Kick off next endpoint after `delay` milliseconds.
             // As kickOffNext() is idempotent, we can do it unconditionally
-            // upon timeout expiration, not caring about whether the lambda above
-            // has already done so.
+            // upon timeout expiration, not caring about whether the lambda
+            // above has already done so.
             co_await corral::sleepFor(io_service, delay);
             kickOffNext();
         };
