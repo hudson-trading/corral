@@ -21,6 +21,7 @@ add_library(corral INTERFACE
     corral/Semaphore.h
     corral/Shared.h
     corral/Task.h
+    corral/ThreadPool.h
     corral/utility.h
     corral/Value.h
     corral/wait.h

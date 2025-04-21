@@ -259,11 +259,26 @@ template <> struct EventLoopTraits<boost::asio::io_service> {
     }
 
     static void run(boost::asio::io_service& io) {
+        io.get_executor().on_work_started();
         io.run();
         io.reset();
     }
 
-    static void stop(boost::asio::io_service& io) { io.stop(); }
+    static void stop(boost::asio::io_service& io) {
+        io.get_executor().on_work_finished();
+        io.stop();
+    }
+};
+
+template <> class ThreadNotification<boost::asio::io_service> {
+  public:
+    ThreadNotification(boost::asio::io_service&, void (*)(void*), void*) {}
+
+    void post(boost::asio::io_service& io,
+              void (*fn)(void*),
+              void* arg) noexcept {
+        boost::asio::dispatch(io, [fn, arg] { fn(arg); });
+    }
 };
 
 } // namespace corral

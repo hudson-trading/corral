@@ -41,6 +41,7 @@
 #include <boost/beast/ssl.hpp>
 #endif
 
+#include "../corral/ThreadPool.h"
 #include "../corral/asio.h"
 #include "../corral/corral.h"
 #include "helpers.h"
@@ -100,6 +101,90 @@ CORRAL_TEST_CASE("asio-socket-smoke", "[asio]") {
                                                      corral::asio_awaitable);
                 CATCH_REQUIRE(std::string(buf, n) == "hello, world");
             });
+}
+
+CORRAL_TEST_CASE("asio-thread-pool", "[asio]") {
+    co_await corral::sleepFor(io, 1ms);
+    corral::ThreadPool tp(io, 2);
+
+    CATCH_SECTION("smoke") {
+        auto tid = co_await tp.run([] { return std::this_thread::get_id(); });
+        CATCH_CHECK(tid != std::this_thread::get_id());
+    }
+
+    CATCH_SECTION("exception") {
+        CATCH_CHECK_THROWS_WITH(
+                co_await tp.run([] { throw std::runtime_error("boo!"); }),
+                Catch::Equals("boo!"));
+    }
+
+    CATCH_SECTION("cancellation-confirmed") {
+        std::atomic<bool> confirmed{false};
+        auto body = [&]() -> corral::Task<> {
+            co_await tp.run([&](corral::ThreadPool::CancelToken cancelled) {
+                while (!cancelled) {}
+                confirmed = true;
+            });
+            CATCH_CHECK(!"should never reach here");
+        };
+        co_await corral::anyOf(body, corral::sleepFor(io, 1ms));
+        CATCH_CHECK(confirmed.load());
+    }
+
+    CATCH_SECTION("cancellation-unconfirmed") {
+        std::atomic<bool> cancelled{false};
+        auto body = [&]() -> corral::Task<int> {
+            int ret = co_await tp.run([&](corral::ThreadPool::CancelToken) {
+                while (!cancelled.load(std::memory_order_relaxed)) {}
+                return 42;
+            });
+            // Cancel token was not consumed, so this line should get executed
+            co_return ret;
+        };
+
+        auto [ret, _] = co_await corral::anyOf(body, [&]() -> corral::Task<> {
+            co_await corral::sleepFor(io, 1ms);
+            cancelled = true;
+        });
+        CATCH_CHECK(ret == 42);
+    }
+}
+
+CORRAL_TEST_CASE("asio-thread-pool-stress", "[asio]") {
+    corral::ThreadPool tp(io, 8);
+    auto work = [](int length) {
+        static std::atomic<uint32_t> threadID{0};
+        static thread_local std::mt19937 rng{++threadID};
+        double cutoff = 1.0 / length;
+        uint64_t c = 0;
+        while (std::generate_canonical<double, 32>(rng) > cutoff) {
+            ++c;
+        }
+        return c;
+    };
+    auto runStress = [&](int length, int count) -> corral::Task<uint64_t> {
+        uint64_t ret = 0;
+        corral::Semaphore sem{1000};
+        CORRAL_WITH_NURSERY(n) {
+            while (count--) {
+                n.start([&sem, &ret, &work, &tp, length]() -> corral::Task<> {
+                    auto lk = co_await sem.lock(); // limit concurrency
+                    ret += co_await tp.run(work, length);
+                });
+            }
+            co_return corral::join;
+        };
+        co_return ret;
+    };
+
+    CATCH_SECTION("short-tasks") {
+        // These tasks run around 1us each
+        co_await runStress(500, 100000);
+    }
+    CATCH_SECTION("long-tasks") {
+        // These run around 100us each
+        co_await runStress(50000, 1000);
+    }
 }
 
 

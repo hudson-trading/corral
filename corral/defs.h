@@ -69,6 +69,32 @@ template <class T, class = void> struct EventLoopTraits {
 };
 
 
+/// Specialize this class for an event loop type to allow ThreadPool
+/// to be constructed around this event loop.
+template <class EventLoopT> class ThreadNotification {
+  public:
+    /// Prepare to be able to invoke `fn(arg)` on the current thread, which is
+    /// running the given event loop. The same arguments are passed to this
+    /// constructor and to `post()` to allow for a variety of notification
+    /// architectures.
+    ThreadNotification(EventLoopT&, void (*fn)(void*), void* arg) {
+        static_assert(!std::is_same_v<EventLoopT, EventLoopT>,
+                      "Specialize this class for your event loop type "
+                      "to allow constructing ThreadPool around the loop");
+    }
+
+    /// Called from worker threads to wake up the main thread.
+    ///
+    /// Arrange for `fn(arg)` to be called on the thread that created the
+    /// ThreadNotification object, which was running `eventLoop` when it was
+    /// created.
+    /// Multiple `post()` calls may be coalesced into a single call to `fn`.
+    ///
+    /// The `eventLoop`, `fn` and `args` are guaranteed match those passed to
+    /// the object constructor (to facilitate stateless implementations).
+    void post(EventLoopT& eventLoop, void (*fn)(void*), void* arg) noexcept;
+};
+
 template <class T> class Task; // forward declaration
 
 } // namespace corral

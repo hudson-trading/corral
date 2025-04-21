@@ -67,4 +67,17 @@ exception_ptr current_exception() noexcept {
     unreachable();
 }
 #endif
+
+inline void spinLoopBody() {
+#if defined(_MSC_VER)
+    ::_mm_pause();
+#elif defined(__i386__) || defined(__x86_64__)
+    __asm__ __volatile__("pause");
+#elif defined(__aarch64__)
+    __asm__ __volatile__("isb");
+#elif defined(__arm__)
+    __asm__ __volatile__("yield");
+#endif
+}
+
 } // namespace corral::detail

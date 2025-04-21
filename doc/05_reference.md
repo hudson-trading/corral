@@ -731,6 +731,81 @@ An ordered communication channel for sending objects of type T between tasks.
   a `ReadHalf&` as a parameter can be used to indicate (and guarantee) that
   the channel is only read from, but not written to; and vice versa for `WriteHalf`.
 
+
+## Multithreading support
+
+### ThreadPool
+
+```cpp
+class ThreadPool {
+  public:
+    class CancelToken;
+
+    template<class EventLoopT>
+    ThreadPool(EventLoopT& eventLoop, unsigned threadCount);
+
+    template<class F, class... Args>
+      requires (std::invocable<F, Args...>
+             || std::invocable<F, Args..., CancelToken>)
+    Awaitable auto run(F&&, Args&&...);
+};
+
+class ThreadPool::CancelToken {
+  public:
+    explicit operator bool() noexcept;
+};
+```
+
+A tool for offloading CPU-bound work, allowing it to run concurrently with the main
+(event-dispatching) thread.
+
+* `template<class EventLoopT> ThreadPool(EventLoopT& eventLoop, unsigned threadCount)`
+  : Creates a thread pool featuring a fixed amount of threads and delivering results
+    to thread running `eventLoop`.
+    A specialization of `ThreadNotification` for the event loop type must be defined
+    (see below).
+
+* `template<class F, class... Args> Awaitable auto run(F&&, Args&&...)`
+  : Submits a regular (synchronous) function to the thread pool, to be executed
+    on one of the worker threads. Suspends the caller until the function returns,
+    and returns the result of its execution (reraising any exceptions).
+    Can only be called from the main thread.
+    The function may take an optional `ThreadPool::CancelToken` argument, which
+    can be queried periodically for the cancellation status of the awaitable
+    (see below).
+
+* `ThreadPool::CancelToken::operator bool()`
+  : Returns true if cancellation of the coroutine suspended on `ThreadPool::run()`
+    has been requested. Also marks the cancellation request confirmed,
+    so if returned true, any return value or generated exception will be discarded.
+    The coroutine will remain suspended until the function returns.
+
+
+### ThreadNotification
+
+```cpp
+template<class EventLoopT>
+class ThreadNotification {
+  public:
+    ThreadNotification(EventLoopT&, void (*fn)(void*), void* arg);
+    void post(EventLoopT&, void (*fn)(void*), void* arg);
+};
+```
+
+A traits-like class for delivering completion events from worker threads
+to the main thread.
+
+* `ThreadNotification(EventLoopT& eventLoop, void (*fn)(void*), void* arg)`
+  : Constructor.
+    `eventLoop`, `fn`, and `arg` will match those passed to all `post()` calls
+    (see below).
+
+* `void post(EventLoopT& eventLoop, void (*fn)(void*), void* arg)`
+  : Called from worker threads of a thread pool, and should arrange `fn(arg)`
+    to be run soon on the main thread.
+    Multiple calls may or may not be coalesced into a single `fn(arg)` invocation.
+
+
 ## Low-level interfaces
 
 ### Introspection tools
