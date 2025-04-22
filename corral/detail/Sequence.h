@@ -138,8 +138,8 @@ class Sequence : private ProxyFrame, private Noncopyable {
 
   private:
     struct FirstStage {
-        [[no_unique_address]] First awaitable;
-        [[no_unique_address]] SanitizedAwaiter<First> awaiter;
+        CORRAL_NO_UNIQUE_ADDR First awaitable;
+        CORRAL_NO_UNIQUE_ADDR SanitizedAwaiter<First> awaiter;
 
         explicit FirstStage(First&& aw)
           : awaitable(std::forward<First>(aw)),
@@ -153,9 +153,9 @@ class Sequence : private ProxyFrame, private Noncopyable {
             decltype(getAwaiter<Second&&>(std::declval<Second>()));
 
     struct SecondStage {
-        [[no_unique_address]] AwaitableReturnType<First> firstValue;
-        [[no_unique_address]] Second awaitable;
-        [[no_unique_address]] SanitizedAwaiter<Second&&, SecondAwaiter> awaiter;
+        CORRAL_NO_UNIQUE_ADDR AwaitableReturnType<First> firstValue;
+        CORRAL_NO_UNIQUE_ADDR Second awaitable;
+        CORRAL_NO_UNIQUE_ADDR SanitizedAwaiter<Second&&, SecondAwaiter> awaiter;
 
         explicit SecondStage(Sequence* c)
           : firstValue(std::move(c->first_.awaiter).await_resume()),
@@ -224,9 +224,9 @@ class Sequence : private ProxyFrame, private Noncopyable {
 
   private:
     Handle parent_;
-    [[no_unique_address]] FirstStage first_;
+    CORRAL_NO_UNIQUE_ADDR FirstStage first_;
 
-    [[no_unique_address]] ThenFn thenFn_;
+    CORRAL_NO_UNIQUE_ADDR ThenFn thenFn_;
     mutable std::variant<Executor*,      // running first stage
                          SecondStage,    // running second stage,
                          std::monostate, // running neither (either constructing

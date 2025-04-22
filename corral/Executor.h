@@ -337,7 +337,7 @@ class Executor {
     void (*collectTaskTree_)(const void* root,
                              detail::TaskTreeCollector&) noexcept = nullptr;
 
-    [[no_unique_address]] CORRAL_UNUSED_MEMBER decltype(CORRAL_ENTER_ASYNC_UNIVERSE)
+    CORRAL_NO_UNIQUE_ADDR CORRAL_UNUSED_MEMBER decltype(CORRAL_ENTER_ASYNC_UNIVERSE)
             universeGuard_ = CORRAL_ENTER_ASYNC_UNIVERSE;
 };
 

@@ -166,7 +166,7 @@ class Shared<Awaitable>::State : private detail::ProxyFrame,
     }
 
   private:
-    [[no_unique_address]] Awaitable awaitable_;
+    CORRAL_NO_UNIQUE_ADDR Awaitable awaitable_;
     detail::SanitizedAwaiter<Awaitable&> awaiter_;
     detail::IntrusiveList<AwaiterBase> parents_;
     std::variant<std::monostate,

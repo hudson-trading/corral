@@ -26,6 +26,8 @@
 #pragma once
 #include <utility>
 
+#include "platform.h"
+
 namespace corral::detail {
 
 template <class Fn> class ScopeGuard {
@@ -36,7 +38,7 @@ template <class Fn> class ScopeGuard {
     ~ScopeGuard() noexcept(noexcept(fn_())) { fn_(); }
 
   private:
-    [[no_unique_address]] Fn fn_;
+    CORRAL_NO_UNIQUE_ADDR Fn fn_;
 };
 
 template <class Fn> ScopeGuard(Fn) -> ScopeGuard<Fn>;

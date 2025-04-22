@@ -159,7 +159,7 @@ class Value<T>::UntilMatches : public AwaiterBase {
     }
 
   private:
-    [[no_unique_address]] Fn fn_;
+    CORRAL_NO_UNIQUE_ADDR Fn fn_;
     std::optional<T> result_;
 };
 
@@ -185,7 +185,7 @@ class Value<T>::UntilChanged : public AwaiterBase {
     }
 
   private:
-    [[no_unique_address]] Fn fn_;
+    CORRAL_NO_UNIQUE_ADDR Fn fn_;
     std::optional<std::pair<T, T>> result_;
 };
 

@@ -161,7 +161,7 @@ class AsioAwaiter : private AsioAwaiterBase<Ret...>,
     }
 
   private:
-    [[no_unique_address]] InitFn initFn_;
+    CORRAL_NO_UNIQUE_ADDR InitFn initFn_;
 };
 
 
@@ -171,7 +171,7 @@ class AsioAwaitable {
 
     struct InitFn {
         Init init_;
-        [[no_unique_address]] Args args_;
+        CORRAL_NO_UNIQUE_ADDR Args args_;
 
         template <class... Ts>
         explicit InitFn(Init&& init, Ts&&... ts)
@@ -225,7 +225,7 @@ template <bool ThrowOnError, class... Ret> class TypeErasedAsioAwaitable {
         void operator()(DoneCB& doneCB) override { impl_(doneCB); }
 
       private:
-        [[no_unique_address]] Impl impl_;
+        CORRAL_NO_UNIQUE_ADDR Impl impl_;
     };
 
     struct InitFn {

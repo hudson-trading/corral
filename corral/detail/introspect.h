@@ -35,7 +35,7 @@
 namespace corral {
 
 struct TreeDumpElement {
-    [[no_unique_address]] std::variant<
+    CORRAL_NO_UNIQUE_ADDR std::variant<
             // If the tree node is an async function invocation, this holds
             // the address it's currently suspended on.
             uintptr_t /*pc*/,

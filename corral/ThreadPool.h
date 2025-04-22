@@ -377,7 +377,7 @@ struct ThreadPool::ThreadNotificationImpl : ThreadPool::IThreadNotification {
 
   private:
     EventLoopT& eventLoop_;
-    [[no_unique_address]] corral::ThreadNotification<EventLoopT> impl_;
+    CORRAL_NO_UNIQUE_ADDR corral::ThreadNotification<EventLoopT> impl_;
 };
 
 

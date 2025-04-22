@@ -48,6 +48,13 @@
 #define CORRAL_UNUSED_MEMBER
 #endif
 
+// msvc ignores standard [[no_unique_address]] attribute
+#ifdef _MSC_VER
+#define CORRAL_NO_UNIQUE_ADDR [[msvc::no_unique_address]]
+#else
+#define CORRAL_NO_UNIQUE_ADDR [[no_unique_address]]
+#endif
+
 
 namespace corral::detail {
 #if __cpp_exceptions

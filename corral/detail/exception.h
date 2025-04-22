@@ -40,7 +40,7 @@ struct RethrowCurrentException;
 
 class TryBlockBase : public TaskParent<void> {
   protected:
-    [[no_unique_address]] exception_ptr exception_;
+    CORRAL_NO_UNIQUE_ADDR exception_ptr exception_;
     friend RethrowCurrentException;
 };
 
@@ -219,10 +219,10 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
 
     union {
         // In scope iff stage_ == Stage::TRY
-        [[no_unique_address]] Try tryLambda_;
+        CORRAL_NO_UNIQUE_ADDR Try tryLambda_;
     };
-    [[no_unique_address]] std::tuple<Catch...> catchLambdas_;
-    [[no_unique_address]] Finally finallyLambda_;
+    CORRAL_NO_UNIQUE_ADDR std::tuple<Catch...> catchLambdas_;
+    CORRAL_NO_UNIQUE_ADDR Finally finallyLambda_;
 
     Handle parent_;
     Executor* executor_ = nullptr;
@@ -231,8 +231,8 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
 /// A factory for creating a `try-finally` block through
 /// `co_await corral::try_(...).finally(...)` syntax.
 template <class Try, class... Catch> class TryBlockBuilder {
-    [[no_unique_address]] Try m_try;
-    [[no_unique_address]] std::tuple<Catch...> m_catch;
+    CORRAL_NO_UNIQUE_ADDR Try m_try;
+    CORRAL_NO_UNIQUE_ADDR std::tuple<Catch...> m_catch;
 
   public:
     explicit TryBlockBuilder(Try&& t, std::tuple<Catch...> c)

@@ -490,7 +490,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
         decltype(auto) await_resume() { return awaiter_.await_resume(); }
 
       private:
-        [[no_unique_address]] SanitizedAwaiter<Awaitable, AwaiterType> awaiter_;
+        CORRAL_NO_UNIQUE_ADDR SanitizedAwaiter<Awaitable, AwaiterType> awaiter_;
         BasePromise* promise_;
     };
 

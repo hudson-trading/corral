@@ -668,7 +668,7 @@ template <class T, class Awaiter = AwaiterType<T>> struct SanitizedAwaiter {
     void abandon() { checker_.forceReset(); }
 
   private:
-    [[no_unique_address]] AwaiterStateChecker checker_;
+    CORRAL_NO_UNIQUE_ADDR AwaiterStateChecker checker_;
     Awaiter awaiter_;
 };
 
@@ -872,7 +872,7 @@ template <class Callable> class AsCoroutineHandle : public CoroutineFrame {
     }
 
   private:
-    [[no_unique_address]] Callable callable_;
+    CORRAL_NO_UNIQUE_ADDR Callable callable_;
 };
 
 template <class Policy, Awaitable... Aw>

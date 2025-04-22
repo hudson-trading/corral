@@ -1086,7 +1086,7 @@ class BasicNursery<Policy>::Scope
   private:
     friend detail::NurseryParentAwaiter<Scope, Policy>; // so it can access
                                                         // nursery_
-    [[no_unique_address]] Callable callable_;
+    CORRAL_NO_UNIQUE_ADDR Callable callable_;
     Impl nursery_;
 };
 
