@@ -21,7 +21,7 @@ find a lot here that looks familiar. A few of corral's design goals are:
   companies with decades of history, we have our own homegrown
   implementations of asynchronous I/O and event loops. We wanted
   to be able to use coroutines with them, as well as pretty much
-  any other existing solution for asynchronous I/O (such as Boost.Asio,
+  any other existing solution for asynchronous I/O (such as Asio,
   libuv, or libevent).
 
 * ***Bridging with callbacks***: the majority of existing code uses
@@ -87,8 +87,10 @@ Obviously a recent C++ compiler is required. The library has been tested on gcc-
 and clang-15+, and was known to occasionally ICE gcc-10.2 back in the day.
 
 To allow people to explore more easily and quickly get something running,
-corral ships with support for Boost.Asio out of the box: pass
-`corral::asio_awaitable` (or `corral::asio_nothrow_awaitable`) to any asio async
-operation to make it return a corral-compatible awaitable. Other I/O frameworks
+corral ships with support for Asio out of the box: pass
+`corral::asio_awaitable` (or `corral::asio_nothrow_awaitable`) to any Asio async
+operation to make it return a corral-compatible awaitable (you need
+to #include `corral/asio.h` or `corral/asio-standalone.h`, depending on whether
+you use boost or standalone version of Asio). Other I/O frameworks
 or event loops can also be adapted to corral relatively straightforwardly.
 `examples/qt_echo_server.cc` shows bridging of corral and Qt.

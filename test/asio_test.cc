@@ -32,7 +32,19 @@
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 
-#ifdef CORRAL_HAVE_OPENSSL
+#include "../corral/asio.h"
+
+#ifdef ASIO_STANDALONE
+#include <asio.hpp>
+
+#include "../corral/asio-standalone.h"
+#define CORRAL_ASIOS                                                           \
+    corral::detail::BoostAsioImpl, corral::detail::StandaloneAsioImpl
+#else
+#define CORRAL_ASIOS corral::detail::BoostAsioImpl
+#endif
+
+#if defined(CORRAL_HAVE_OPENSSL)
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
@@ -42,34 +54,49 @@
 #endif
 
 #include "../corral/ThreadPool.h"
-#include "../corral/asio.h"
 #include "../corral/corral.h"
 #include "helpers.h"
 
-#define CORRAL_TEST_CASE(...)                                                  \
+#define CORRAL_BOOST_ASIO_TEST_CASE(...)                                       \
     CORRAL_TEST_CASE_IMPL(boost::asio::io_service, io, __VA_ARGS__)
+
+
+#define CORRAL_MULTI_ASIO_TEST_CASE(name, tags)                                \
+    CORRAL_MULTI_ASIO_TEST_CASE_IMPL_1(__COUNTER__, name, tags)
+#define CORRAL_MULTI_ASIO_TEST_CASE_IMPL_1(counter, name, tags)                \
+    CORRAL_MULTI_ASIO_TEST_CASE_IMPL_2(counter, name, tags)
+#define CORRAL_MULTI_ASIO_TEST_CASE_IMPL_2(counter, name, tags)                \
+    template <class Asio>                                                      \
+    static ::corral::Task<void> test_body_##counter(                           \
+            typename Asio::io_service&);                                       \
+    CATCH_TEMPLATE_TEST_CASE(name, tags, CORRAL_ASIOS) {                       \
+        typename TestType::io_service io;                                      \
+        corral::run(io, test_body_##counter<TestType>(io));                    \
+    }                                                                          \
+    template <class Asio>                                                      \
+    static ::corral::Task<void> test_body_##counter(                           \
+            typename Asio::io_service& io)
+
 
 namespace {
 
 using Clock = std::chrono::high_resolution_clock;
 using namespace std::chrono_literals;
 
-namespace asio = boost::asio;
-using tcp = asio::ip::tcp;
+using tcp = boost::asio::ip::tcp;
 
-
-CORRAL_TEST_CASE("asio-smoke", "[asio]") {
-    asio::deadline_timer t(io);
-    t.expires_from_now(boost::posix_time::millisec(100));
+CORRAL_MULTI_ASIO_TEST_CASE("asio-smoke", "[asio]") {
+    typename Asio::steady_timer t(io);
+    t.expires_from_now(100ms);
     auto from = Clock::now();
     co_await t.async_wait(corral::asio_awaitable);
     CATCH_CHECK(Clock::now() - from >= 90ms);
 }
 
-CORRAL_TEST_CASE("asio-anyof", "[asio]") {
-    asio::deadline_timer t1(io), t2(io);
-    t1.expires_from_now(boost::posix_time::millisec(100));
-    t2.expires_from_now(boost::posix_time::millisec(500));
+CORRAL_MULTI_ASIO_TEST_CASE("asio-anyof", "[asio]") {
+    typename Asio::steady_timer t1(io), t2(io);
+    t1.expires_from_now(100ms);
+    t2.expires_from_now(500ms);
     auto from = Clock::now();
     auto [s1, s2] =
             co_await corral::anyOf(t1.async_wait(corral::asio_awaitable),
@@ -83,28 +110,28 @@ CORRAL_TEST_CASE("asio-anyof", "[asio]") {
     CATCH_CHECK(!s2);
 }
 
-CORRAL_TEST_CASE("asio-socket-smoke", "[asio]") {
+CORRAL_BOOST_ASIO_TEST_CASE("asio-socket-smoke", "[asio]") {
     tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 0));
     co_await corral::allOf(
             [&]() -> corral::Task<> {
                 tcp::socket sock(io);
                 co_await acceptor.async_accept(sock, corral::asio_awaitable);
-                co_await asio::async_write(sock, asio::buffer("hello, world"),
-                                           corral::asio_awaitable);
+                co_await boost::asio::async_write(
+                        sock, boost::asio::buffer("hello, world"),
+                        corral::asio_awaitable);
             },
             [&]() -> corral::Task<> {
                 tcp::socket sock(io);
                 co_await sock.async_connect(acceptor.local_endpoint(),
                                             corral::asio_awaitable);
                 char buf[12];
-                size_t n = co_await asio::async_read(sock, asio::buffer(buf),
-                                                     corral::asio_awaitable);
+                size_t n = co_await boost::asio::async_read(
+                        sock, boost::asio::buffer(buf), corral::asio_awaitable);
                 CATCH_REQUIRE(std::string(buf, n) == "hello, world");
             });
 }
 
-CORRAL_TEST_CASE("asio-thread-pool", "[asio]") {
-    co_await corral::sleepFor(io, 1ms);
+CORRAL_BOOST_ASIO_TEST_CASE("asio-thread-pool", "[asio]") {
     corral::ThreadPool tp(io, 2);
 
     CATCH_SECTION("smoke") {
@@ -150,7 +177,7 @@ CORRAL_TEST_CASE("asio-thread-pool", "[asio]") {
     }
 }
 
-CORRAL_TEST_CASE("asio-thread-pool-stress", "[asio]") {
+CORRAL_BOOST_ASIO_TEST_CASE("asio-thread-pool-stress", "[asio]") {
     corral::ThreadPool tp(io, 8);
     auto work = [](int length) {
         static std::atomic<uint32_t> threadID{0};
@@ -187,11 +214,10 @@ CORRAL_TEST_CASE("asio-thread-pool-stress", "[asio]") {
     }
 }
 
-
 namespace beast = boost::beast;
 namespace http = beast::http;
 
-CORRAL_TEST_CASE("beast-http", "[asio]") {
+CORRAL_BOOST_ASIO_TEST_CASE("beast-http", "[asio]") {
     tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 0));
     co_await corral::allOf(
             [&]() -> corral::Task<> {
@@ -234,7 +260,7 @@ CORRAL_TEST_CASE("beast-http", "[asio]") {
 }
 
 #ifdef CORRAL_HAVE_OPENSSL
-namespace ssl = asio::ssl;
+namespace ssl = boost::asio::ssl;
 
 std::pair<std::string /*cert*/, std::string /*privateKey*/>
 generateSelfSignedCert() {
@@ -282,11 +308,12 @@ generateSelfSignedCert() {
     return {cert, key};
 }
 
-CORRAL_TEST_CASE("beast-https", "[asio]") {
+CORRAL_BOOST_ASIO_TEST_CASE("beast-https", "[asio]") {
     ssl::context sslCtx(ssl::context::tlsv12);
     auto [cert, key] = generateSelfSignedCert();
-    sslCtx.use_certificate_chain(asio::buffer(cert));
-    sslCtx.use_private_key(asio::buffer(key), ssl::context::file_format::pem);
+    sslCtx.use_certificate_chain(boost::asio::buffer(cert));
+    sslCtx.use_private_key(boost::asio::buffer(key),
+                           ssl::context::file_format::pem);
 
     tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 0));
     co_await corral::allOf(

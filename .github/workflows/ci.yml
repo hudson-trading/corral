@@ -18,6 +18,7 @@ jobs:
           - gcc-13
           - gcc-14
           - gcc-noexcept
+          - gcc-standalone-asio
           - clang-15
           - clang-16
           - gcc-arm32
@@ -46,6 +47,12 @@ jobs:
             cc: gcc-14
             cxx: g++-14
             cxxflags: -fno-exceptions -fno-rtti
+
+          - variant: gcc-standalone-asio
+            deps: g++-14 libasio-dev
+            cc: gcc-14
+            cxx: g++-14
+            cxxflags: -DASIO_STANDALONE
 
           - variant: clang-15
             deps: clang-15 g++-13 libstdc++-14-dev- libgcc-14-dev- libssl-dev

@@ -23,76 +23,69 @@
 //
 // SPDX-License-Identifier: MIT
 
-#pragma once
-
-#include <boost/asio.hpp>
-#include <boost/version.hpp>
+#include <asio.hpp>
+#include <asio/version.hpp>
+#include <system_error>
 
 #include "detail/asio.h"
 
-#if BOOST_VERSION < 107700
-#error boost 1.77 or above is required
+#if ASIO_VERSION < 101900
+#error asio 1.19 or above is required
 #endif
 
-
 namespace corral::detail {
-struct BoostAsioImpl {
-    using io_service = boost::asio::io_service;
-    using steady_timer = boost::asio::steady_timer;
+struct StandaloneAsioImpl {
+    using io_service = asio::io_service;
+    using steady_timer = asio::steady_timer;
 
-    using cancellation_slot = boost::asio::cancellation_slot;
-    using cancellation_signal = boost::asio::cancellation_signal;
-    using cancellation_type = boost::asio::cancellation_type;
+    using cancellation_slot = asio::cancellation_slot;
+    using cancellation_signal = asio::cancellation_signal;
+    using cancellation_type = asio::cancellation_type;
 
     static constexpr const auto operation_aborted =
-            boost::asio::error::operation_aborted;
+            asio::error::operation_aborted;
 
     template <class C, class Sig, class Init, class... Args>
     static auto async_initiate(Init&& init,
                                std::type_identity_t<C>& c,
                                Args&&... args) {
-        return boost::asio::async_initiate<C, Sig>(std::forward<Init>(init), c,
-                                                   std::forward<Args>(args)...);
+        return asio::async_initiate<C, Sig>(std::forward<Init>(init), c,
+                                            std::forward<Args>(args)...);
     }
 
     template <class... Args> static auto dispatch(Args&&... args) {
-        return boost::asio::dispatch(std::forward<Args>(args)...);
+        return asio::dispatch(std::forward<Args>(args)...);
     }
 
-    using error_code = boost::system::error_code;
-    using system_error = boost::system::system_error;
+    using error_code = std::error_code;
+    using system_error = std::system_error;
 };
 } // namespace corral::detail
 
-namespace boost::asio {
+namespace asio {
 template <bool ThrowOnError, class X, class... Ret>
 class async_result<::corral::detail::asio_awaitable_t<ThrowOnError>,
-                   X(boost::system::error_code, Ret...)>
-  : public ::corral::detail::AsyncResultImpl<::corral::detail::BoostAsioImpl,
-                                             ThrowOnError,
-                                             Ret...> {};
-} // namespace boost::asio
+                   X(std::error_code, Ret...)>
+  : public ::corral::detail::AsyncResultImpl<
+            ::corral::detail::StandaloneAsioImpl,
+            ThrowOnError,
+            Ret...> {};
+} // namespace asio
 
 namespace corral {
 
 template <>
-struct EventLoopTraits<boost::asio::io_service>
-  : detail::AsioEventLoopTraitsImpl<detail::BoostAsioImpl> {};
+struct EventLoopTraits<asio::io_service>
+  : detail::AsioEventLoopTraitsImpl<detail::StandaloneAsioImpl> {};
 template <>
-struct ThreadNotification<boost::asio::io_service>
-  : detail::AsioThreadNotificationImpl<detail::BoostAsioImpl> {
+struct ThreadNotification<asio::io_service>
+  : detail::AsioThreadNotificationImpl<detail::StandaloneAsioImpl> {
     using ThreadNotification::AsioThreadNotificationImpl::
             AsioThreadNotificationImpl;
 };
 
 template <class R, class P>
-auto sleepFor(boost::asio::io_service& io, std::chrono::duration<R, P> delay) {
-    return detail::AsioTimer<detail::BoostAsioImpl>(io, delay);
-}
-
-inline auto sleepFor(boost::asio::io_service& io,
-                     boost::posix_time::time_duration delay) {
-    return detail::AsioTimer<detail::BoostAsioImpl>(
-            io, std::chrono::nanoseconds(delay.total_nanoseconds()));
+auto sleepFor(asio::io_service& io, std::chrono::duration<R, P> delay) {
+    return detail::AsioTimer<detail::StandaloneAsioImpl>(io, delay);
 }
 } // namespace corral

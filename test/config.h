@@ -30,6 +30,10 @@
 #define CATCH_TEST_CASE(...) TEST_CASE(__VA_ARGS__)
 #endif
 
+#ifndef CATCH_TEMPLATE_TEST_CASE
+#define CATCH_TEMPLATE_TEST_CASE(...) TEMPLATE_TEST_CASE(__VA_ARGS__)
+#endif
+
 #ifndef CATCH_SECTION
 #define CATCH_SECTION(...) SECTION(__VA_ARGS__)
 #endif
