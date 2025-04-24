@@ -45,13 +45,12 @@ add_library(corral INTERFACE
 
 target_include_directories(corral INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
-option(CORRAL_TEST_RUNNER "Use this wrapper for running tests" "")
-option(CORRAL_XBUILD "Do not pull any features unavailable while cross-compiling" "")
+set(CORRAL_TEST_RUNNER "" CACHE STRING "Use this wrapper for running tests")
 
-option(
+set(
     CORRAL_CATCH2
-    "include path for Catch2 (or Git repository URL)"
     "https://github.com/catchorg/catch2"
+    CACHE STRING "include path for Catch2 (or Git repository URL)"
 )
 
 if("${CORRAL_CATCH2}" MATCHES ".*://.*")
@@ -79,7 +78,7 @@ add_test(NAME corral_basic_test COMMAND ${CORRAL_TEST_RUNNER} corral_basic_test)
 # ASIO interaction
 #
 
-option(CORRAL_BOOST "include path for boost (or Git repository URL)" "")
+set(CORRAL_BOOST "" CACHE STRING "include path for boost (or Git repository URL)")
 
 if(NOT ("${CORRAL_BOOST}" STREQUAL ""))
     if("${CORRAL_BOOST}" MATCHES ".*://.*")
@@ -123,7 +122,7 @@ install(TARGETS corral EXPORT corralTargets
 #
 # Examples
 #
-option(CORRAL_EXAMPLES "Build examples" OFF)
+set(CORRAL_EXAMPLES OFF CACHE BOOL "Build examples")
 if(CORRAL_EXAMPLES)
     add_subdirectory(examples)
 endif()
