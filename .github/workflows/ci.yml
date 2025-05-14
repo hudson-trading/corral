@@ -118,7 +118,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get -q -q update
-          sudo apt-get install -q -q -y make cmake git libboost1.83-dev qt6-base-dev catch2 ${{ matrix.deps }}
+          sudo apt-get install -q -q -y make cmake git libboost1.83-dev catch2 ${{ matrix.deps }}
           sudo mkdir -p /opt/include
           sudo cp -r /usr/include/boost /opt/include
 
