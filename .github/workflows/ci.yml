@@ -154,9 +154,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install dependencies
+        run: MAKEOPTS="-j$(nproc) -l$(nproc)" FEATURES="parallel-install parallel-fetch" emerge-webrsync && getuto && emerge -vtg -j8 --verbose-conflicts dev-libs/boost dev-libs/openssl dev-qt/qtbase =dev-cpp/catch-2* dev-build/cmake sys-devel/mold && . /etc/profile
+
       - name: Test project latest stable gcc
         run: |
-          MAKEOPTS="-j$(nproc) -l$(nproc)" FEATURES="parallel-install parallel-fetch" emerge-webrsync && getuto && emerge -vtg -j8 --verbose-conflicts dev-libs/boost dev-libs/openssl dev-qt/qtbase =dev-cpp/catch-2* dev-build/cmake sys-devel/mold
           cmake -S . -B ./build_gcc_tests -DCORRAL_BOOST='a' -DCORRAL_CATCH2='' -DBUILD_TESTING=1 -DCORRAL_EXAMPLES=0 -DCMAKE_CXX_COMPILER="g++" -DCMAKE_CXX_FLAGS='-O3 -flto -pipe -march=x86-64-v3 -fsanitize=address,leak,undefined -Werror=odr -Werror=lto-type-mismatch -Werror=strict-aliasing -Wall -Wextra -Wshadow -Wnon-virtual-dtor -Wold-style-cast -Wcast-align -Wunused -Woverloaded-virtual -Wpedantic -Wconversion -Wsign-conversion -Wnull-dereference -Wdouble-promotion -Wformat=2 -Wmisleading-indentation -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Wuseless-cast -Wnrvo -fvisibility=hidden' -DCMAKE_EXE_LINKER_FLAGS="-flto -fsanitize=address,leak,undefined -fuse-ld=mold" --log-level=DEBUG -DFETCHCONTENT_QUIET=OFF --debug-find
           cmake --build ./build_gcc_tests -j $(nproc) --verbose
           ctest --test-dir ./build_gcc_tests -j $(nproc) --verbose
@@ -173,9 +175,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install dependencies
+        run: MAKEOPTS="-j$(nproc) -l$(nproc)" FEATURES="parallel-install parallel-fetch" emerge-webrsync && getuto && emerge -vtg -j8 --verbose-conflicts dev-libs/boost dev-libs/openssl dev-qt/qtbase =dev-cpp/catch-2* dev-build/cmake sys-devel/mold llvm-core/clang && . /etc/profile
+
       - name: Test project latest stable clang
         run: |
-          MAKEOPTS="-j$(nproc) -l$(nproc)" FEATURES="parallel-install parallel-fetch" emerge-webrsync && getuto && emerge -vtg -j8 --verbose-conflicts dev-libs/boost dev-libs/openssl dev-qt/qtbase =dev-cpp/catch-2* dev-build/cmake sys-devel/mold llvm-core/clang
           cmake -S . -B ./build_clang_test -DCORRAL_BOOST='a' -DCORRAL_CATCH2='' -DBUILD_TESTING=1 -DCORRAL_EXAMPLES=0 -DCMAKE_CXX_COMPILER="clang++" -DCMAKE_CXX_FLAGS='-O3 -flto=thin -pipe -march=x86-64-v3 -fsanitize=address,leak,undefined -Werror=odr -Werror=strict-aliasing -Wall -Wextra -Wshadow -Wnon-virtual-dtor -Wold-style-cast -Wcast-align -Wunused -Woverloaded-virtual -Wpedantic -Wconversion -Wsign-conversion -Wnull-dereference -Wdouble-promotion -Wformat=2' -DCMAKE_EXE_LINKER_FLAGS="-flto=thin -fsanitize=address,leak,undefined" --log-level=DEBUG -DFETCHCONTENT_QUIET=OFF --debug-find
           cmake --build ./build_clang_test -j $(nproc) --verbose
           ctest --test-dir ./build_clang_test -j $(nproc) --verbose
