@@ -164,7 +164,7 @@ jobs:
           ctest --test-dir ./build_gcc -j $(nproc) --verbose
 
     
-  ci_linux_gentoo_gcc:
+  ci_linux_gentoo_clang:
     runs-on: ubuntu-latest
     container:
       image: 'gentoo:stage3-amd64-openrc'
