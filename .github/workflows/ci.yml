@@ -179,3 +179,4 @@ jobs:
           cmake -S . -B ./build_clang -DCORRAL_BOOST='a' -DCORRAL_CATCH2='' -DBUILD_TESTING=1 -DCORRAL_EXAMPLES=1 -DCMAKE_CXX_COMPILER=clang -DCMAKE_CXX_FLAGS='-O3 -flto=thin -pipe -march=x86-64-v3 -fsanitize=address,leak,undefined -Werror=odr -Werror=strict-aliasing -Wall -Wextra -Wshadow -Wnon-virtual-dtor -Wold-style-cast -Wcast-align -Wunused -Woverloaded-virtual -Wpedantic -Wconversion -Wsign-conversion -Wnull-dereference -Wdouble-promotion -Wformat=2' -DCMAKE_EXE_LINKER_FLAGS="-flto=thin -fsanitize=address,leak,undefined" --log-level=DEBUG -DFETCHCONTENT_QUIET=OFF --debug-find
           cmake --build ./build_clang -j $(nproc) --verbose
           ctest --test-dir ./build_clang -j $(nproc) --verbose
+
