@@ -45,6 +45,8 @@ add_library(corral INTERFACE
 
 target_include_directories(corral INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
+if(BUILD_TESTING)
+
 set(CORRAL_TEST_RUNNER "" CACHE STRING "Use this wrapper for running tests")
 
 set(
@@ -88,9 +90,12 @@ if(NOT ("${CORRAL_BOOST}" STREQUAL ""))
             GIT_TAG boost-1.80.0
         )
         FetchContent_MakeAvailable(Boost)
+        set(CORRAL_BOOST_ASIO_LIB_NAME "Boost::asio")
     else()
+        message(DEBUG "I WAS HERE")
         set(Boost_INCLUDE_DIR "${CORRAL_BOOST}")
         find_package(Boost 1.77.0 REQUIRED)
+        set(CORRAL_BOOST_ASIO_LIB_NAME "Boost::boost")
     endif()
 
     add_executable(corral_asio_test test/asio_test.cc test/helpers.h)
@@ -108,6 +113,7 @@ if(NOT ("${CORRAL_BOOST}" STREQUAL ""))
     add_test(NAME corral_asio_test COMMAND ${CORRAL_TEST_RUNNER} corral_asio_test)
 endif()
 
+endif()
 
 #
 # Installation
