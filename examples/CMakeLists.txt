@@ -15,7 +15,10 @@ add_executable(asio_happy_eyeballs asio_happy_eyeballs.cc)
 target_link_libraries(asio_happy_eyeballs PRIVATE corral "${CORRAL_BOOST_ASIO_LIB_NAME}")
 
 
-find_package(Qt6 REQUIRED COMPONENTS Core Network)
-qt_add_executable(qt_echo_server qt_echo_server.cc)
-target_link_libraries(qt_echo_server PRIVATE corral Qt6::Core Qt6::Network)
+find_package(Qt6 COMPONENTS Core Network)
+
+if(${Qt6Core_FOUND})
+  qt_add_executable(qt_echo_server qt_echo_server.cc)
+  target_link_libraries(qt_echo_server PRIVATE corral Qt6::Core Qt6::Network)
+endif()
 
