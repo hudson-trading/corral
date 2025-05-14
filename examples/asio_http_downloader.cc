@@ -23,6 +23,7 @@
 //
 // SPDX-License-Identifier: MIT
 
+#include <cstddef>
 #include <fstream>
 #include <iostream>
 
@@ -33,7 +34,6 @@
 
 namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
-namespace posix = asio::posix;
 namespace beast = boost::beast;
 namespace http = beast::http;
 
@@ -47,7 +47,7 @@ corral::Task<void> http_download(
                      std::pair<size_t /*ofs*/, size_t /*size*/>>
                 concurrencyOrRange) {
     size_t ofs = 0;
-    ssize_t len = 0;
+    ptrdiff_t len = 0;
 
     static constexpr const std::string_view scheme = "http://";
     if (!url.starts_with(scheme)) {
@@ -116,7 +116,7 @@ corral::Task<void> http_download(
             if (ec && ec != http::error::need_buffer) {
                 throw beast::system_error(ec);
             }
-            ssize_t sz = bodybuf.size() - body.size;
+            ptrdiff_t sz = bodybuf.size() - body.size;
             std::cerr << "now at " << ofs << ", got " << sz << " bytes\n";
             out.seekp(ofs);
             out.write(bodybuf.data(), sz);

@@ -146,7 +146,7 @@ class Executor {
             // likely way to hit this is by destroying an UnsafeNursery
             // inside an async task, which deals with the pending callbacks
             // using Executor::drain().
-            scheduled_->buffer_.foreach([&](Task& task) {
+            scheduled_->buffer_.for_each_item([&](Task& task) {
                 if (task.second == this) {
                     task.first = +[](void*) noexcept {};
                     task.second = nullptr;

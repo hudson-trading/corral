@@ -114,7 +114,7 @@ class Queue {
         ++size_;
     }
 
-    template <std::invocable<T&> Fn> void foreach(Fn&& fn) {
+    template <std::invocable<T&> Fn> void for_each_item(Fn&& fn) {
         for (T& elem : first_range()) {
             std::forward<Fn>(fn)(elem);
         }
