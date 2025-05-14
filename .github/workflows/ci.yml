@@ -150,7 +150,7 @@ jobs:
   ci_linux_gentoo_gcc:
     runs-on: ubuntu-latest
     container:
-      image: 'gentoo:stage3-amd64-openrc'
+      image: 'gentoo/stage3:amd64-openrc'
     steps:
       - uses: actions/checkout@v4
 
@@ -167,7 +167,7 @@ jobs:
   ci_linux_gentoo_clang:
     runs-on: ubuntu-latest
     container:
-      image: 'gentoo:stage3-amd64-openrc'
+      image: 'gentoo/stage3:amd64-openrc'
     steps:
       - uses: actions/checkout@v4
 
