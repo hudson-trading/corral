@@ -155,7 +155,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: MAKEOPTS="-j$(nproc) -l$(nproc)" FEATURES="parallel-install parallel-fetch" emerge-webrsync && getuto && emerge -vtg --verbose-conflicts dev-libs/boost dev-libs/openssl dev-qt/qtbase =dev-cpp/catch-2* dev-build/cmake sys-devel/mold
+        run: MAKEOPTS="-j$(nproc) -l$(nproc)" FEATURES="parallel-install parallel-fetch" emerge-webrsync && getuto && emerge -vtg -j4 --verbose-conflicts dev-libs/boost dev-libs/openssl dev-qt/qtbase =dev-cpp/catch-2* dev-build/cmake sys-devel/mold
 
       - name: Test project latest stable gcc
         run: |
@@ -172,7 +172,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: MAKEOPTS="-j$(nproc) -l$(nproc)" FEATURES="parallel-install parallel-fetch" emerge-webrsync && getuto && emerge -vtg --verbose-conflicts dev-libs/boost dev-libs/openssl dev-qt/qtbase =dev-cpp/catch-2* dev-build/cmake sys-devel/mold llvm-core/clang
+        run: MAKEOPTS="-j$(nproc) -l$(nproc)" FEATURES="parallel-install parallel-fetch" emerge-webrsync && getuto && emerge -vtg -j4 --verbose-conflicts dev-libs/boost dev-libs/openssl dev-qt/qtbase =dev-cpp/catch-2* dev-build/cmake sys-devel/mold llvm-core/clang
 
       - name: Test project latest stable clang
         run: |
