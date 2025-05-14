@@ -6,146 +6,146 @@ on:
   pull_request:
 
 jobs:
-  # ci_linux:
-  #   runs-on: ubuntu-24.04
-  #
-  #   strategy:
-  #     fail-fast: false
-  #
-  #     matrix:
-  #       variant:
-  #         - gcc-12
-  #         - gcc-13
-  #         - gcc-14
-  #         - gcc-noexcept
-  #         - gcc-standalone-asio
-  #         - clang-15
-  #         - clang-16
-  #         - gcc-arm32
-  #         - gcc-arm32-thumb
-  #         - gcc-aarch64
-  #         - msvc-wine
-  #
-  #       include:
-  #         - variant: gcc-12
-  #           deps: g++-12 libssl-dev
-  #           cc: gcc-12
-  #           cxx: g++-12
-  #
-  #         - variant: gcc-13
-  #           deps: g++-13 libssl-dev
-  #           cc: gcc-13
-  #           cxx: g++-13
-  #
-  #         - variant: gcc-14
-  #           deps: g++-14 libssl-dev
-  #           cc: gcc-14
-  #           cxx: g++-14
-  #
-  #         - variant: gcc-noexcept
-  #           deps: g++-14 libssl-dev
-  #           cc: gcc-14
-  #           cxx: g++-14
-  #           cxxflags: -fno-exceptions -fno-rtti
-  #
-  #         - variant: gcc-standalone-asio
-  #           deps: g++-14 libasio-dev
-  #           cc: gcc-14
-  #           cxx: g++-14
-  #           cxxflags: -DASIO_STANDALONE
-  #
-  #         - variant: clang-15
-  #           deps: clang-15 g++-13 libstdc++-14-dev- libgcc-14-dev- libssl-dev
-  #           cc: clang-15
-  #           cxx: clang++-15
-  #
-  #         - variant: clang-16
-  #           deps: clang-16 libssl-dev
-  #           cc: clang-16
-  #           cxx: clang++-16
-  #
-  #         - variant: gcc-arm32
-  #           deps: g++-12-arm-linux-gnueabihf qemu-user-static
-  #           cc: arm-linux-gnueabihf-gcc-12
-  #           cxx: arm-linux-gnueabihf-g++-12
-  #           cxxflags: -static -marm -Wno-psabi
-  #           test_runner: qemu-arm-static
-  #
-  #         - variant: gcc-arm32-thumb
-  #           deps: g++-12-arm-linux-gnueabihf qemu-user-static
-  #           cc: arm-linux-gnueabihf-gcc-12
-  #           cxx: arm-linux-gnueabihf-g++-12
-  #           cxxflags: -static -mthumb -Wno-psabi
-  #           test_runner: qemu-arm-static
-  #
-  #         - variant: gcc-aarch64
-  #           deps: g++-12-aarch64-linux-gnu qemu-user-static
-  #           cc: aarch64-linux-gnu-gcc-12
-  #           cxx: aarch64-linux-gnu-g++-12
-  #           cxxflags: -static
-  #           test_runner: qemu-aarch64-static
-  #
-  #         - variant: msvc-wine
-  #
-  #           # Note: windows workers are in short supply on github,
-  #           # so run this on linux with wine.
-  #           # (TODO: switch this to Docker to speed things up)
-  #           deps: >
-  #             wine64 wine64-preloader wine64-tools python3 msitools
-  #             python3-simplejson python3-six ca-certificates winbind
-  #
-  #           init: |
-  #             cd /usr/bin
-  #             sudo ln -sf ../lib/wine/wine64 .
-  #             wine64 wineboot --init
-  #             while pgrep wineserver > /dev/null; do sleep 1; done
-  #             sudo mkdir -p /opt
-  #             sudo git clone https://github.com/mstorsjo/msvc-wine /opt/msvc-wine
-  #             cd /opt/msvc-wine
-  #             sudo env PYTHONUNBUFFERED=1 ./vsdownload.py --accept-license --dest /opt/msvc
-  #             sudo ./install.sh /opt/msvc
-  #
-  #           cmake_flags: -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_LINKER=link -DCMAKE_CXX_FLAGS_DEBUG="/MT /Zi /Ob0 /Od /RTC1" -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
-  #           env: PATH=/opt/msvc/bin/x64:$PATH
-  #           cc: cl
-  #           cxx: cl
-  #           cxxflags: /Iz:/opt/include /std:c++20 /bigobj /EHsc
-  #           test_runner: wine64
-  #
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #
-  #     - name: Install dependencies
-  #       run: |
-  #         sudo apt-get -q -q update
-  #         sudo apt-get install -q -q -y make cmake git libboost1.83-dev qt6-base-dev catch2 ${{ matrix.deps }}
-  #         sudo mkdir -p /opt/include
-  #         sudo cp -r /usr/include/boost /opt/include
-  #
-  #     - name: Variant-specific init
-  #       run: ${{ matrix.init }}
-  #
-  #     - name: Configure
-  #       run: >
-  #         mkdir -p ${{ github.workspace }}/build 
-  #         && cd ${{ github.workspace }}/build 
-  #         && env ${{ matrix.env }} cmake
-  #         -DCMAKE_C_COMPILER=${{ matrix.cc }}
-  #         -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
-  #         -DCMAKE_CXX_FLAGS="${{ matrix.cxxflags }}"
-  #         -DCORRAL_BOOST=/opt/include
-  #         -DCORRAL_CATCH2=https://github.com/catchorg/catch2
-  #         -DCORRAL_TEST_RUNNER=${{ matrix.test_runner }}
-  #         -DBUILD_TESTING=1
-  #         -DCORRAL_EXAMPLES=1
-  #         ${{ matrix.cmake_flags }}
-  #         ${{ github.workspace }}
-  #
-  #     - name: Build
-  #       run: cd ${{ github.workspace }}/build && env ${{ matrix.env }} make
-  #
-  #     - name: Test
-  #       run: cd ${{ github.workspace }}/build && env ${{ matrix.env }} ctest --output-on-failure
+  ci_linux:
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+
+      matrix:
+        variant:
+          - gcc-12
+          - gcc-13
+          - gcc-14
+          - gcc-noexcept
+          - gcc-standalone-asio
+          - clang-15
+          - clang-16
+          - gcc-arm32
+          - gcc-arm32-thumb
+          - gcc-aarch64
+          - msvc-wine
+
+        include:
+          - variant: gcc-12
+            deps: g++-12 libssl-dev
+            cc: gcc-12
+            cxx: g++-12
+
+          - variant: gcc-13
+            deps: g++-13 libssl-dev
+            cc: gcc-13
+            cxx: g++-13
+
+          - variant: gcc-14
+            deps: g++-14 libssl-dev
+            cc: gcc-14
+            cxx: g++-14
+
+          - variant: gcc-noexcept
+            deps: g++-14 libssl-dev
+            cc: gcc-14
+            cxx: g++-14
+            cxxflags: -fno-exceptions -fno-rtti
+
+          - variant: gcc-standalone-asio
+            deps: g++-14 libasio-dev
+            cc: gcc-14
+            cxx: g++-14
+            cxxflags: -DASIO_STANDALONE
+
+          - variant: clang-15
+            deps: clang-15 g++-13 libstdc++-14-dev- libgcc-14-dev- libssl-dev
+            cc: clang-15
+            cxx: clang++-15
+
+          - variant: clang-16
+            deps: clang-16 libssl-dev
+            cc: clang-16
+            cxx: clang++-16
+
+          - variant: gcc-arm32
+            deps: g++-12-arm-linux-gnueabihf qemu-user-static
+            cc: arm-linux-gnueabihf-gcc-12
+            cxx: arm-linux-gnueabihf-g++-12
+            cxxflags: -static -marm -Wno-psabi
+            test_runner: qemu-arm-static
+
+          - variant: gcc-arm32-thumb
+            deps: g++-12-arm-linux-gnueabihf qemu-user-static
+            cc: arm-linux-gnueabihf-gcc-12
+            cxx: arm-linux-gnueabihf-g++-12
+            cxxflags: -static -mthumb -Wno-psabi
+            test_runner: qemu-arm-static
+
+          - variant: gcc-aarch64
+            deps: g++-12-aarch64-linux-gnu qemu-user-static
+            cc: aarch64-linux-gnu-gcc-12
+            cxx: aarch64-linux-gnu-g++-12
+            cxxflags: -static
+            test_runner: qemu-aarch64-static
+
+          - variant: msvc-wine
+
+            # Note: windows workers are in short supply on github,
+            # so run this on linux with wine.
+            # (TODO: switch this to Docker to speed things up)
+            deps: >
+              wine64 wine64-preloader wine64-tools python3 msitools
+              python3-simplejson python3-six ca-certificates winbind
+
+            init: |
+              cd /usr/bin
+              sudo ln -sf ../lib/wine/wine64 .
+              wine64 wineboot --init
+              while pgrep wineserver > /dev/null; do sleep 1; done
+              sudo mkdir -p /opt
+              sudo git clone https://github.com/mstorsjo/msvc-wine /opt/msvc-wine
+              cd /opt/msvc-wine
+              sudo env PYTHONUNBUFFERED=1 ./vsdownload.py --accept-license --dest /opt/msvc
+              sudo ./install.sh /opt/msvc
+
+            cmake_flags: -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_LINKER=link -DCMAKE_CXX_FLAGS_DEBUG="/MT /Zi /Ob0 /Od /RTC1" -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+            env: PATH=/opt/msvc/bin/x64:$PATH
+            cc: cl
+            cxx: cl
+            cxxflags: /Iz:/opt/include /std:c++20 /bigobj /EHsc
+            test_runner: wine64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get -q -q update
+          sudo apt-get install -q -q -y make cmake git libboost1.83-dev qt6-base-dev catch2 ${{ matrix.deps }}
+          sudo mkdir -p /opt/include
+          sudo cp -r /usr/include/boost /opt/include
+
+      - name: Variant-specific init
+        run: ${{ matrix.init }}
+
+      - name: Configure
+        run: >
+          mkdir -p ${{ github.workspace }}/build 
+          && cd ${{ github.workspace }}/build 
+          && env ${{ matrix.env }} cmake
+          -DCMAKE_C_COMPILER=${{ matrix.cc }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          -DCMAKE_CXX_FLAGS="${{ matrix.cxxflags }}"
+          -DCORRAL_BOOST=/opt/include
+          -DCORRAL_CATCH2=https://github.com/catchorg/catch2
+          -DCORRAL_TEST_RUNNER=${{ matrix.test_runner }}
+          -DBUILD_TESTING=1
+          -DCORRAL_EXAMPLES=1
+          ${{ matrix.cmake_flags }}
+          ${{ github.workspace }}
+
+      - name: Build
+        run: cd ${{ github.workspace }}/build && env ${{ matrix.env }} make
+
+      - name: Test
+        run: cd ${{ github.workspace }}/build && env ${{ matrix.env }} ctest --output-on-failure
 
   ci_linux_gentoo_gcc:
     runs-on: ubuntu-latest
