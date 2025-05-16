@@ -31,7 +31,6 @@
 #include "../corral/corral.h"
 
 using tcp = boost::asio::ip::tcp;
-namespace posix = boost::asio::posix;
 
 /// An example sketch implementation of the Happy Eyeballs connection algorithm
 /// (RFC 8305) (less endpoint reordering, irrelevant for a concurrency example).
