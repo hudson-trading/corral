@@ -26,7 +26,7 @@ else()
   )
 endif()
 
-if(CXX_FLAGS_NO_EXCEPTIONS AND CXX_FLAGS_NO_RTTI)
+if(NOT CXX_FLAGS_NO_EXCEPTIONS AND NOT CXX_FLAGS_NO_RTTI)
   add_executable(asio_hello_world asio_hello_world.cc)
   target_link_libraries(
     asio_hello_world PRIVATE corral "${CORRAL_BOOST_ASIO_LIB_NAME}"
