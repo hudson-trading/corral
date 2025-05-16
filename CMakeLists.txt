@@ -56,6 +56,7 @@ set(
 )
 
 if("${CORRAL_CATCH2}" MATCHES ".*://.*")
+    message(STATUS "Trying to bundle Catch2 ver 2.xx.x (maybe via git cloning whole Boost).")
     include(FetchContent)
     FetchContent_Declare(
         catch
@@ -64,6 +65,7 @@ if("${CORRAL_CATCH2}" MATCHES ".*://.*")
     )
     FetchContent_MakeAvailable(catch)
 else()
+    message(STATUS "Trying to use installed Catch2.")
     set(Catch_INCLUDE_DIR "${CORRAL_CATCH2}")
     find_package(Catch2 2.13.9 REQUIRED)
 endif()
@@ -84,6 +86,7 @@ set(CORRAL_BOOST "" CACHE STRING "include path for boost (or Git repository URL)
 
 if(NOT ("${CORRAL_BOOST}" STREQUAL ""))
     if("${CORRAL_BOOST}" MATCHES ".*://.*")
+        message(STATUS "Trying to bundle Boost (maybe via git cloning whole Boost).")
         FetchContent_Declare(
             Boost
             GIT_REPOSITORY "${CORRAL_BOOST}"
@@ -92,7 +95,7 @@ if(NOT ("${CORRAL_BOOST}" STREQUAL ""))
         FetchContent_MakeAvailable(Boost)
         set(CORRAL_BOOST_ASIO_LIB_NAME "Boost::asio")
     else()
-        message(DEBUG "I WAS HERE")
+        message(STATUS "Trying to use installed Boost.")
         set(Boost_INCLUDE_DIR "${CORRAL_BOOST}")
         find_package(Boost 1.77.0 REQUIRED)
         set(CORRAL_BOOST_ASIO_LIB_NAME "Boost::boost")
@@ -103,10 +106,14 @@ if(NOT ("${CORRAL_BOOST}" STREQUAL ""))
     target_compile_definitions(corral_asio_test PRIVATE CATCH_CONFIG_MAIN)
 
     if("${CORRAL_TEST_RUNNER}" STREQUAL "")
+      message(STATUS "Trying to use installed OpenSSL.")
         find_package(OpenSSL)
         if(OpenSSL_FOUND)
+            message(STATUS "Using installed OpenSSL.")
             target_compile_definitions(corral_asio_test PRIVATE CORRAL_HAVE_OPENSSL)
             target_link_libraries(corral_asio_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+        else()
+            message(STATUS "Failed to find installed OpenSSL")
         endif()
     endif()
 
