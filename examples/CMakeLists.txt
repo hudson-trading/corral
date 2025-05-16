@@ -47,8 +47,8 @@ if(NOT CXX_FLAGS_NO_EXCEPTIONS AND NOT CXX_FLAGS_NO_RTTI)
     asio_happy_eyeballs PRIVATE corral "${CORRAL_BOOST_ASIO_LIB_NAME}"
   )
 
-  if((NOT (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC"))
-     OR (NOT (CMAKE_SYSTEM_NAME STREQUAL "Windows"))
+  if(NOT ((CMAKE_CXX_COMPILER_ID STREQUAL "MSVC") OR (CMAKE_SYSTEM_NAME STREQUAL
+                                                      "Windows"))
   )
     add_executable(asio_netcat asio_netcat.cc)
     target_link_libraries(
