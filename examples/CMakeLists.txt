@@ -5,8 +5,10 @@ target_link_libraries(asio_hello_world PRIVATE corral "${CORRAL_BOOST_ASIO_LIB_N
 add_executable(asio_echo_server asio_echo_server.cc)
 target_link_libraries(asio_echo_server PRIVATE corral "${CORRAL_BOOST_ASIO_LIB_NAME}")
 
-add_executable(asio_netcat asio_netcat.cc)
-target_link_libraries(asio_netcat PRIVATE corral "${CORRAL_BOOST_ASIO_LIB_NAME}")
+if(NOT (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC"))
+  add_executable(asio_netcat asio_netcat.cc)
+  target_link_libraries(asio_netcat PRIVATE corral "${CORRAL_BOOST_ASIO_LIB_NAME}")
+endif()
 
 add_executable(asio_http_downloader asio_http_downloader.cc)
 target_link_libraries(asio_http_downloader PRIVATE corral "${CORRAL_BOOST_ASIO_LIB_NAME}")
