@@ -486,7 +486,7 @@ auto Shared<Awaitable>::AwaiterBase::await_must_resume() const noexcept {
 
 template <class Awaitable>
 void Shared<Awaitable>::AwaiterBase::await_introspect(auto& c) const noexcept {
-    c.node("Shared::Awaiter");
+    c.node("Shared::Awaiter", this);
     if (state_) {
         state_->introspect(c);
     } else {

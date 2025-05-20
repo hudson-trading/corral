@@ -132,7 +132,7 @@ class Sequence : private ProxyFrame, private Noncopyable {
         } else if (inSecondStage()) {
             second().awaiter.await_introspect(c);
         } else {
-            c.node("sequence (degenerate)");
+            c.node("sequence (degenerate)", this);
         }
     }
 

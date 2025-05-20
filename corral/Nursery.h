@@ -945,7 +945,7 @@ inline Handle BasicNursery<Policy>::continuation(
 template <class Policy>
 void BasicNursery<Policy>::introspect(detail::TaskTreeCollector& c,
                                       const char* title) const noexcept {
-    c.node(title);
+    c.node(title, this);
     for (auto& t : tasks_) {
         c.child(t);
     }

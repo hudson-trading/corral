@@ -33,7 +33,6 @@
 #include "../config.h"
 #include "../defs.h"
 #include "frames.h"
-#include "introspect.h"
 
 namespace corral {
 
@@ -66,10 +65,8 @@ struct TaskTag {};
 
 /// Like std::conditional, but for templates.
 template <bool If,
-          template <class...>
-          class Then,
-          template <class...>
-          class Else>
+          template <class...> class Then,
+          template <class...> class Else>
 struct ConditionalTmpl {
     template <class... Args> using With = Then<Args...>;
 };
@@ -389,14 +386,14 @@ void awaitSetExecutor(Awaiter& awaiter, Executor* ex) noexcept {
 }
 
 template <class Awaiter>
-void awaitIntrospect(const Awaiter& awaiter, TaskTreeCollector& c) noexcept {
+void awaitIntrospect(const Awaiter& awaiter, auto& c) noexcept {
     if constexpr (Introspectable<Awaiter>) {
         awaiter.await_introspect(c);
     } else {
 #if __cpp_rtti
-        c.node(&typeid(Awaiter));
+        c.node(&typeid(Awaiter), &awaiter);
 #else
-        c.node("<non-introspectable awaitable>");
+        c.node("<non-introspectable awaitable>", &awaiter);
 #endif
     }
 }
@@ -472,7 +469,7 @@ template <class Callable> class AwaitableLambda {
 
 template <class Callable>
     requires(std::derived_from<std::invoke_result_t<Callable>, TaskTag>)
-AwaitableLambda<Callable> operator co_await(Callable && c) {
+AwaitableLambda<Callable> operator co_await(Callable&& c) {
     return AwaitableLambda<Callable>(std::forward<Callable>(c));
 }
 
@@ -508,7 +505,7 @@ class [[nodiscard]] YieldImpl : private Callable {
         return false;
     }
     ReturnType await_resume() { return std::move(result_); }
-    void await_introspect(auto& c) const noexcept { c.node("Yield"); }
+    void await_introspect(auto& c) const noexcept { c.node("Yield", this); }
 
   private:
     ReturnType result_;
@@ -525,7 +522,7 @@ class [[nodiscard]] YieldImpl<Callable, ReturnType&&> : private Callable {
         return false;
     }
     ReturnType&& await_resume() { return static_cast<ReturnType&&>(result_); }
-    void await_introspect(auto& c) const noexcept { c.node("Yield"); }
+    void await_introspect(auto& c) const noexcept { c.node("Yield", this); }
 
   private:
     ReturnType* result_ = nullptr;
@@ -542,7 +539,7 @@ class [[nodiscard]] YieldImpl<Callable, void> : private Callable {
         return false;
     }
     void await_resume() {}
-    void await_introspect(auto& c) const noexcept { c.node("Yield"); }
+    void await_introspect(auto& c) const noexcept { c.node("Yield", this); }
 };
 
 template <class Callable>
@@ -657,7 +654,7 @@ template <class T, class Awaiter = AwaiterType<T>> struct SanitizedAwaiter {
         }
     }
 
-    void await_introspect(TaskTreeCollector& c) const noexcept {
+    void await_introspect(auto& c) const noexcept {
         awaitIntrospect(awaiter_, c);
     }
 
@@ -686,40 +683,56 @@ template <class T, class... Args> class AwaiterMaker {
     std::tuple<Args...> args_;
 };
 
-
-// A common part of NoncancellableAdapter and DisposableAdapter.
-// Note: all three are meant to be used together with AwaitableMaker,
-// so they don't store the object they have been passed.
-template <class T> class CancellableAdapterBase {
+// A common part for all awaitable adapters, which wrap an awaiter.
+//
+// Implements full corral awaiter API, by default proxying to the awaiter,
+// so awaiter implementations only need to override the methods they
+// want to change.
+//
+// Note: this class is meant to be used together with AwaitableMaker,
+// so it does not store the awaitable object it has been passed,
+// only the awaiter.
+template <class T> class AwaiterAdapterBase {
   protected:
     using Awaiter = AwaiterType<T>;
     Awaiter awaiter_;
 
   public:
-    explicit CancellableAdapterBase(T&& object)
+    explicit AwaiterAdapterBase(T&& object)
       : awaiter_(getAwaiter(std::forward<T>(object))) {}
+
+    bool await_ready() const noexcept { return awaiter_.await_ready(); }
+    auto await_suspend(Handle h) { return awaiter_.await_suspend(h); }
+    auto await_cancel(Handle h) noexcept { return awaitCancel(awaiter_, h); }
+    decltype(auto) await_resume() {
+        return std::forward<Awaiter>(awaiter_).await_resume();
+    }
 
     void await_set_executor(Executor* ex) noexcept {
         awaitSetExecutor(awaiter_, ex);
     }
 
-    bool await_ready() const noexcept { return awaiter_.await_ready(); }
-    auto await_suspend(Handle h) { return awaiter_.await_suspend(h); }
-    decltype(auto) await_resume() {
-        return std::forward<Awaiter>(awaiter_).await_resume();
+    auto await_early_cancel() noexcept { return awaitEarlyCancel(awaiter_); }
+
+    auto await_must_resume() const noexcept {
+        return awaitMustResume(awaiter_);
+    }
+
+    void await_introspect(auto& c) const noexcept {
+        awaitIntrospect(awaiter_, c);
     }
 };
 
 /// A wrapper around an awaitable that inhibits cancellation.
-template <class T>
-class NoncancellableAdapter : public CancellableAdapterBase<T> {
+template <class T> class NoncancellableAdapter : public AwaiterAdapterBase<T> {
   public:
-    using CancellableAdapterBase<T>::CancellableAdapterBase;
+    using AwaiterAdapterBase<T>::AwaiterAdapterBase;
 
     bool await_early_cancel() noexcept { return false; }
+    bool await_cancel(Handle) noexcept { return false; }
     bool await_must_resume() const noexcept { return true; }
-    void await_introspect(TaskTreeCollector& c) const noexcept {
-        c.node("Noncancellable");
+    void await_introspect(auto& c) const noexcept {
+        c.node("Noncancellable", this);
         c.child(this->awaiter_);
     }
 };
@@ -729,20 +742,14 @@ class NoncancellableAdapter : public CancellableAdapterBase<T> {
 /// is safe to dispose of upon cancellation.
 /// May be used on third party awaitables which don't know about
 /// corral async's cancellation mechanism.
-template <class T> class DisposableAdapter : public CancellableAdapterBase<T> {
+template <class T> class DisposableAdapter : public AwaiterAdapterBase<T> {
   public:
-    using CancellableAdapterBase<T>::CancellableAdapterBase;
+    using AwaiterAdapterBase<T>::AwaiterAdapterBase;
 
-    bool await_early_cancel() noexcept {
-        return awaitEarlyCancel(this->awaiter_);
-    }
-    bool await_cancel(Handle h) noexcept {
-        return awaitCancel(this->awaiter_, h);
-    }
     auto await_must_resume() const noexcept { return std::false_type{}; }
 
-    void await_introspect(TaskTreeCollector& c) const noexcept {
-        c.node("Disposable");
+    void await_introspect(auto& c) const noexcept {
+        c.node("Disposable", this);
         c.child(this->awaiter_);
     }
 };
@@ -795,8 +802,8 @@ template <class Awaitable> class RunOnCancel {
         return std::false_type{};
     }
 
-    void await_introspect(TaskTreeCollector& c) const noexcept {
-        c.node("RunOnCancel");
+    void await_introspect(auto& c) const noexcept {
+        c.node("RunOnCancel", this);
         c.child(awaiter_);
     }
 

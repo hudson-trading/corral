@@ -30,6 +30,7 @@
 
 #include "config.h"
 #include "defs.h"
+#include "detail/introspect.h"
 #include "detail/utility.h"
 
 namespace corral {
@@ -55,7 +56,9 @@ class SuspendForever {
     void await_suspend(Handle) {}
     [[noreturn]] void await_resume() { detail::unreachable(); }
     auto await_cancel(Handle h) noexcept { return std::true_type{}; }
-    void await_introspect(auto& c) const noexcept { c.node("SuspendForever"); }
+    void await_introspect(auto& c) const noexcept {
+        c.node("SuspendForever", this);
+    }
 };
 static constexpr const detail::CoAwaitFactory<SuspendForever> suspendForever;
 
@@ -77,7 +80,7 @@ class Yield {
 
     void await_resume() {}
     auto await_cancel(Handle) noexcept { return std::true_type{}; }
-    void await_introspect(auto& c) const noexcept { c.node("Yield"); }
+    void await_introspect(auto& c) const noexcept { c.node("Yield", this); }
 };
 static constexpr const detail::CoAwaitFactory<Yield> yield;
 
@@ -175,6 +178,20 @@ template <class Awaitable> auto disposable(Awaitable awaitable) {
 template <Awaitable<void> Aw> auto untilCancelledAnd(Aw&& awaitable) {
     return makeAwaitable<detail::RunOnCancel<Aw>>(std::forward<Aw>(awaitable));
 }
+
+/// A wrapper around an awaitable that allows being annotated
+/// with a custom string when dumping task tree.
+/// This may be useful for debugging purposes.
+struct AnnotateMaker {
+    constexpr AnnotateMaker() = default;
+
+    template <Awaitable Aw>
+    auto operator()(std::string annotation, Aw&& awaitable) const {
+        return makeAwaitable<detail::AnnotatedTreeNode<Aw>>(
+                std::move(annotation), std::forward<Aw>(awaitable));
+    }
+};
+static constexpr const AnnotateMaker annotate;
 
 /// A helper macro useful in nursery bodies.
 /// Clang and MSVC currently fail to pay attention to [[noreturn]]

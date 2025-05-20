@@ -85,7 +85,7 @@ There are also two optional methods which are unrelated to cancellation:
   for use in printing the task tree. The actual type of the `auto` is
   `corral::detail::TaskTreeCollector` as of this writing, but you
   should use `auto` to refer to it. `await_introspect()` should do
-  `c.node("description")` to describe this awaitable, followed by
+  `c.node("description", this)` to describe this awaitable, followed by
   `c.child(someChild)` for each child awaitable.
 
 Some additional notes about the cancellation system:

@@ -622,7 +622,7 @@ class MuxTuple : public MuxBase<Policy, Self> {
     }
 
     void introspect(const char* name, auto& c) const noexcept {
-        c.node(name);
+        c.node(name, this);
         auto impl = [&c](const auto&... children) {
             (children.introspect(c), ...);
         };
@@ -910,7 +910,7 @@ class MuxRange : public MuxBase<Policy, Self> {
     }
 
     void introspect(const char* name, auto& c) const noexcept {
-        c.node(name);
+        c.node(name, this);
         for (auto& child : children()) {
             child.helper.introspect(c);
         }

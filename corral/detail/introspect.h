@@ -27,10 +27,12 @@
 
 #include <concepts>
 #include <iterator>
+#include <string>
 #include <variant>
 
 #include "../concepts.h"
 #include "ScopeGuard.h"
+#include "utility.h"
 
 namespace corral {
 
@@ -50,7 +52,9 @@ struct TreeDumpElement {
             ,
             const std::type_info* /*type*/
 #endif
-            > value;
+            >
+            value;
+    const void* ptr;
     int depth;
 };
 
@@ -61,20 +65,20 @@ class TaskTreeCollector {
     TaskTreeCollector(void (*sink)(void*, TreeDumpElement), void* cookie)
       : sink_(sink), cookie_(cookie) {}
 
-    void node(const char* name) noexcept {
-        TreeDumpElement elt{name, depth_};
+    void node(const char* name, const void* ptr = nullptr) noexcept {
+        TreeDumpElement elt{name, ptr, depth_};
         sink_(cookie_, elt);
     }
 
 #if __cpp_rtti
-    void node(const std::type_info* ti) noexcept {
-        TreeDumpElement elt{ti, depth_};
+    void node(const std::type_info* ti, const void* ptr = nullptr) noexcept {
+        TreeDumpElement elt{ti, ptr, depth_};
         sink_(cookie_, elt);
     }
 #endif
 
-    void taskPC(uintptr_t pc) noexcept {
-        TreeDumpElement elt{pc, depth_};
+    void taskPC(uintptr_t pc, Handle h = {}) noexcept {
+        TreeDumpElement elt{pc, h.address(), depth_};
         sink_(cookie_, elt);
     }
 
@@ -86,16 +90,17 @@ class TaskTreeCollector {
             child.await_introspect(*this);
         } else {
 #if __cpp_rtti
-            TreeDumpElement elt{&typeid(child), depth_};
+            TreeDumpElement elt{&typeid(child), &child, depth_};
 #else
-            TreeDumpElement elt{"<non-introspectable awaitable>", depth_};
+            TreeDumpElement elt{"<non-introspectable awaitable>", &child,
+                                depth_};
 #endif
             sink_(cookie_, elt);
         }
     }
 
     void footnote(const char* name) noexcept {
-        TreeDumpElement elt{name, depth_ + 1};
+        TreeDumpElement elt{name, nullptr, depth_ + 1};
         sink_(cookie_, elt);
     }
 
@@ -127,6 +132,21 @@ OutIt dumpTaskTree(const auto& awaiter, OutIt out) {
                  [&out](const TreeDumpElement& node) { *out++ = node; });
     return out;
 }
+
+template <class T> class AnnotatedTreeNode : public AwaiterAdapterBase<T> {
+  public:
+    AnnotatedTreeNode(std::string annotation, T&& awaitable)
+      : AwaiterAdapterBase<T>(std::forward<T>(awaitable)),
+        annotation_(std::move(annotation)) {}
+
+    void await_introspect(auto& c) const noexcept {
+        c.node(annotation_.c_str());
+        c.child(this->awaiter_);
+    }
+
+  private:
+    std::string annotation_;
+};
 
 } // namespace detail
 } // namespace corral

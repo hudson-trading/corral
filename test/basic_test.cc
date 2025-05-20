@@ -141,7 +141,7 @@ class TestEventLoop {
         }
         void await_resume() { suspended_ = false; }
 
-        void await_introspect(auto& c) const noexcept { c.node("Sleep"); }
+        void await_introspect(auto& c) const noexcept { c.node("Sleep", this); }
 
       private:
         long delayMS() const { return static_cast<long>(delay_.count()); }
@@ -2196,30 +2196,44 @@ CORRAL_TEST_CASE("try-blocks") {
 
 CORRAL_TEST_CASE("task-tree") {
     std::vector<TreeDumpElement> tree;
+    std::vector<std::pair<int, std::string>> items;
+
     CORRAL_WITH_NURSERY(n) {
-        co_await allOf(allOf(t.sleep(1ms), t.sleep(3ms)), [&]() -> Task<> {
-            co_await t.sleep(2ms);
-            co_await dumpTaskTree(std::back_inserter(tree));
-        });
+        n.start(annotate, "a sibling task",
+                [&]() -> Task<> { co_await t.sleep(5ms); });
+
+        co_await allOf(
+                allOf(annotate("this should complete", t.sleep(1ms)),
+                      annotate("this should be sleeping", t.sleep(3ms))),
+                [&]() -> Task<> {
+                    co_await t.sleep(2ms);
+
+                    co_await dumpTaskTree(std::back_inserter(tree));
+                    for (auto& elem : tree) {
+                        items.emplace_back(
+                                elem.depth,
+                                std::holds_alternative<uintptr_t>(elem.value)
+                                        ? "<TASK>"
+                                        : std::get<const char*>(elem.value));
+                    }
+                });
         co_return join;
     };
 
-    std::vector<std::pair<int, std::string>> items;
-    for (auto& elem : tree) {
-        items.emplace_back(elem.depth,
-                           std::holds_alternative<uintptr_t>(elem.value)
-                                   ? "<TASK>"
-                                   : std::get<const char*>(elem.value));
-    }
     CATCH_CHECK(items == std::vector<std::pair<int, std::string>>{
                                  {0, "<TASK>"},
                                  {1, "Nursery"},
                                  {2, "<TASK>"},
                                  {3, "AllOf"},
                                  {4, "AllOf"},
-                                 {5, "Sleep"},
+                                 {5, "this should be sleeping"},
+                                 {6, "Sleep"},
                                  {4, "<TASK>"},
-                                 {5, "<YOU ARE HERE>"}});
+                                 {5, "<YOU ARE HERE>"},
+                                 {2, "<TASK>"},
+                                 {3, "a sibling task"},
+                                 {4, "<TASK>"},
+                                 {5, "Sleep"}});
 }
 
 using RawStack = std::vector<uintptr_t>;

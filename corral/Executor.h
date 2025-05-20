@@ -35,6 +35,7 @@
 #include "defs.h"
 #include "detail/Queue.h"
 #include "detail/ScopeGuard.h"
+#include "detail/introspect.h"
 #include "detail/platform.h"
 #include "detail/utility.h"
 
@@ -337,8 +338,9 @@ class Executor {
     void (*collectTaskTree_)(const void* root,
                              detail::TaskTreeCollector&) noexcept = nullptr;
 
-    CORRAL_NO_UNIQUE_ADDR CORRAL_UNUSED_MEMBER decltype(CORRAL_ENTER_ASYNC_UNIVERSE)
-            universeGuard_ = CORRAL_ENTER_ASYNC_UNIVERSE;
+    CORRAL_NO_UNIQUE_ADDR
+            CORRAL_UNUSED_MEMBER decltype(CORRAL_ENTER_ASYNC_UNIVERSE)
+                    universeGuard_ = CORRAL_ENTER_ASYNC_UNIVERSE;
 };
 
 namespace detail {

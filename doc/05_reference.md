@@ -818,11 +818,15 @@ struct TreeDumpElement {
     std::variant<uintptr_t /*pc*/,
                  const char* /*name*/,
                  const std::type_info* /*type*/> value;
+    const void* ptr;
     int depth;
 };
 
 template <std::output_iterator<TreeDumpElement> OutIt>
 Awaitable<OutIt> auto dumpTaskTree(OutIt out);
+
+template<Awaitable T>
+Awaitable auto annotate(std::string annotation, T&&);
 ```
 
 * `OutIt collectAsyncStackTrace(OutIt out)`
@@ -846,6 +850,12 @@ Awaitable<OutIt> auto dumpTaskTree(OutIt out);
   a textual name describing an awaitable that implements
   `await_introspect()`; or a `std::type_info*` indicating the type
   of an awaitable that does not implement `await_introspect()`.
+  `ptr` holds the address of the coroutine frame or the awaitable.
+
+* `Awaitable<T> auto annotate(std::string annotation, Awaitable<T> auto&&)`
+  : Allows annotating the awaitable with a custom string to appear
+  in the async task tree (see above). The tree will have an artificial
+  node with a matching name, with the only child being the wrapped awaitable.
 
 ### Executor
 

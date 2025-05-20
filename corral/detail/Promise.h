@@ -197,10 +197,10 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
 
     void await_introspect(TaskTreeCollector& c) const noexcept {
         if (!hasCoroutine()) {
-            c.node("<noop>");
+            c.node("<noop>", this);
             return;
         }
-        c.taskPC(pc);
+        c.taskPC(pc, const_cast<BasePromise*>(this)->realHandle());
         if (state_ == State::Ready) {
             c.footnote("<SCHEDULED>");
         } else if (state_ == State::Running) {
@@ -261,7 +261,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     /// Instead, it will invoke the given callback and then resume its parent.
     /// This can be used to create promises that are not associated with a
     /// coroutine; see just() and noop(). Must be called before start().
-    template <class Derived, void (Derived::* onStart)()>
+    template <class Derived, void (Derived::*onStart)()>
     void makeStub(bool deleteThisOnDestroy) {
         CORRAL_ASSERT(state_ == State::Ready && parent_ == nullptr);
         state_ = State::Stub;
@@ -303,7 +303,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     bool hasAwaiter() const noexcept { return state_ > State::Stub; }
     bool hasCoroutine() const noexcept { return state_ != State::Stub; }
 
-    template <void (BasePromise::* trampolineFn)()> void onResume() {
+    template <void (BasePromise::*trampolineFn)()> void onResume() {
         CoroutineFrame::resumeFn = +[](CoroutineFrame* frame) {
             auto promise = static_cast<BasePromise*>(frame);
             (promise->*trampolineFn)();
