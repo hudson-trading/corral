@@ -254,28 +254,28 @@ class TypeErasedAsioAwaitable {
 };
 
 template <class AsioImpl> struct AsioEventLoopTraitsImpl {
-    static EventLoopID eventLoopID(typename AsioImpl::io_service& io) {
+    static EventLoopID eventLoopID(typename AsioImpl::io_context& io) {
         return EventLoopID(&io);
     }
 
-    static void run(typename AsioImpl::io_service& io) {
+    static void run(typename AsioImpl::io_context& io) {
         io.get_executor().on_work_started();
         io.run();
-        io.reset();
+        io.restart();
     }
 
-    static void stop(typename AsioImpl::io_service& io) {
+    static void stop(typename AsioImpl::io_context& io) {
         io.get_executor().on_work_finished();
         io.stop();
     }
 };
 
 template <class AsioImpl> struct AsioThreadNotificationImpl {
-    AsioThreadNotificationImpl(typename AsioImpl::io_service&,
+    AsioThreadNotificationImpl(typename AsioImpl::io_context&,
                                void (*)(void*),
                                void*) {}
 
-    void post(typename AsioImpl::io_service& io,
+    void post(typename AsioImpl::io_context& io,
               void (*fn)(void*),
               void* arg) noexcept {
         AsioImpl::dispatch(io, [fn, arg] { fn(arg); });
@@ -303,10 +303,10 @@ struct AsyncResultImpl {
 template <class AsioImpl> class AsioTimer {
   public:
     template <class R, class P>
-    AsioTimer(typename AsioImpl::io_service& io,
+    AsioTimer(typename AsioImpl::io_context& io,
               std::chrono::duration<R, P> delay)
       : timer_(io) {
-        timer_.expires_from_now(delay);
+        timer_.expires_after(delay);
     }
 
     Awaiter auto operator co_await() {

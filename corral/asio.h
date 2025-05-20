@@ -37,7 +37,7 @@
 
 namespace corral::detail {
 struct BoostAsioImpl {
-    using io_service = boost::asio::io_service;
+    using io_context = boost::asio::io_context;
     using steady_timer = boost::asio::steady_timer;
 
     using cancellation_slot = boost::asio::cancellation_slot;
@@ -76,21 +76,21 @@ class async_result<::corral::detail::asio_awaitable_t<ThrowOnError>,
 namespace corral {
 
 template <>
-struct EventLoopTraits<boost::asio::io_service>
+struct EventLoopTraits<boost::asio::io_context>
   : detail::AsioEventLoopTraitsImpl<detail::BoostAsioImpl> {};
 template <>
-struct ThreadNotification<boost::asio::io_service>
+struct ThreadNotification<boost::asio::io_context>
   : detail::AsioThreadNotificationImpl<detail::BoostAsioImpl> {
     using ThreadNotification::AsioThreadNotificationImpl::
             AsioThreadNotificationImpl;
 };
 
 template <class R, class P>
-auto sleepFor(boost::asio::io_service& io, std::chrono::duration<R, P> delay) {
+auto sleepFor(boost::asio::io_context& io, std::chrono::duration<R, P> delay) {
     return detail::AsioTimer<detail::BoostAsioImpl>(io, delay);
 }
 
-inline auto sleepFor(boost::asio::io_service& io,
+inline auto sleepFor(boost::asio::io_context& io,
                      boost::posix_time::time_duration delay) {
     return detail::AsioTimer<detail::BoostAsioImpl>(
             io, std::chrono::nanoseconds(delay.total_nanoseconds()));

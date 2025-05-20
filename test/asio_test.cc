@@ -58,7 +58,7 @@
 #include "helpers.h"
 
 #define CORRAL_BOOST_ASIO_TEST_CASE(...)                                       \
-    CORRAL_TEST_CASE_IMPL(boost::asio::io_service, io, __VA_ARGS__)
+    CORRAL_TEST_CASE_IMPL(boost::asio::io_context, io, __VA_ARGS__)
 
 
 #define CORRAL_MULTI_ASIO_TEST_CASE(name, tags)                                \
@@ -68,14 +68,14 @@
 #define CORRAL_MULTI_ASIO_TEST_CASE_IMPL_2(counter, name, tags)                \
     template <class Asio>                                                      \
     static ::corral::Task<void> test_body_##counter(                           \
-            typename Asio::io_service&);                                       \
+            typename Asio::io_context&);                                       \
     CATCH_TEMPLATE_TEST_CASE(name, tags, CORRAL_ASIOS) {                       \
-        typename TestType::io_service io;                                      \
+        typename TestType::io_context io;                                      \
         corral::run(io, test_body_##counter<TestType>(io));                    \
     }                                                                          \
     template <class Asio>                                                      \
     static ::corral::Task<void> test_body_##counter(                           \
-            typename Asio::io_service& io)
+            typename Asio::io_context& io)
 
 
 namespace {
@@ -87,7 +87,7 @@ using tcp = boost::asio::ip::tcp;
 
 CORRAL_MULTI_ASIO_TEST_CASE("asio-smoke", "[asio]") {
     typename Asio::steady_timer t(io);
-    t.expires_from_now(100ms);
+    t.expires_after(100ms);
     auto from = Clock::now();
     co_await t.async_wait(corral::asio_awaitable);
     CATCH_CHECK(Clock::now() - from >= 90ms);
@@ -95,8 +95,8 @@ CORRAL_MULTI_ASIO_TEST_CASE("asio-smoke", "[asio]") {
 
 CORRAL_MULTI_ASIO_TEST_CASE("asio-anyof", "[asio]") {
     typename Asio::steady_timer t1(io), t2(io);
-    t1.expires_from_now(100ms);
-    t2.expires_from_now(500ms);
+    t1.expires_after(100ms);
+    t2.expires_after(500ms);
     auto from = Clock::now();
     auto [s1, s2] =
             co_await corral::anyOf(t1.async_wait(corral::asio_awaitable),

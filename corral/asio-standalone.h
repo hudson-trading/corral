@@ -35,7 +35,7 @@
 
 namespace corral::detail {
 struct StandaloneAsioImpl {
-    using io_service = asio::io_service;
+    using io_context = asio::io_context;
     using steady_timer = asio::steady_timer;
 
     using cancellation_slot = asio::cancellation_slot;
@@ -75,17 +75,17 @@ class async_result<::corral::detail::asio_awaitable_t<ThrowOnError>,
 namespace corral {
 
 template <>
-struct EventLoopTraits<asio::io_service>
+struct EventLoopTraits<asio::io_context>
   : detail::AsioEventLoopTraitsImpl<detail::StandaloneAsioImpl> {};
 template <>
-struct ThreadNotification<asio::io_service>
+struct ThreadNotification<asio::io_context>
   : detail::AsioThreadNotificationImpl<detail::StandaloneAsioImpl> {
     using ThreadNotification::AsioThreadNotificationImpl::
             AsioThreadNotificationImpl;
 };
 
 template <class R, class P>
-auto sleepFor(asio::io_service& io, std::chrono::duration<R, P> delay) {
+auto sleepFor(asio::io_context& io, std::chrono::duration<R, P> delay) {
     return detail::AsioTimer<detail::StandaloneAsioImpl>(io, delay);
 }
 } // namespace corral
