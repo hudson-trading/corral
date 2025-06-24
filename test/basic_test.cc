@@ -1681,7 +1681,7 @@ CORRAL_TEST_CASE("value") {
 
     co_await allOf(
             [&]() -> Task<> {
-                co_await v.untilEquals(0);
+                co_await until(v <= 0);
                 CATCH_CHECK(t.now() == 0ms);
 
                 auto [from, to] = co_await v.untilChanged();
@@ -1707,12 +1707,12 @@ CORRAL_TEST_CASE("value") {
                 co_await t.sleep(1ms);
                 v = 3;
                 co_await t.sleep(1ms);
-                v = 4;
+                ++v;
 
                 co_await t.sleep(1ms);
                 v = 7;
-                v = 5;
-                v = 7;
+                v -= 2;
+                v += 2;
             });
 
     CATCH_CHECK(t.now() == 4ms);

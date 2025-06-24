@@ -578,6 +578,9 @@ template <class T>
 class Value {
     Value(Value&&) = delete;
     Value& operator=(Value&&) = delete;
+
+    class Comparison;
+
   public:
     Value();
     explicit Value(T value);
@@ -587,12 +590,32 @@ class Value {
 
     void set(T value);
     Value& operator=(T value);
+    T modify(std::invocable<T&> auto&& fn);
 
     Awaitable<T> auto untilMatches(std::invocable<const T&> auto&& pred);
     Awaitable<T> auto untilEquals(T expected);
+
     Awaitable<std::pair<T, T>> auto untilChanged(std::invocable<const T&, const T&> auto&& pred);
     Awaitable<std::pair<T, T>> auto untilChanged(T from, T to);
     Awaitable<std::pair<T, T>> auto untilChanged();
+
+    T operator++();
+    T operator++(int);
+    T operator+=(auto&&);
+    // ...etc...
+
+    Comparison operator==(auto&&);
+    bool operator==(auto&&) const;
+    // ...ditto for other comparisions...
+
+    auto operator<=>(auto&&) const;
+};
+
+template<class T>
+class Value<T>::Comparison {
+  public:
+    operator bool() const;
+    friend Awaitable auto until(Comparision&&);
 };
 ```
 
@@ -604,6 +627,9 @@ thereof, satisfies a given condition.
 * `void Value<T>::set(T)`
 * `Value<T>& Value<T>::operator=(T)`
   : Get or set the value.
+
+* `T Value<T>::modify(std::invocable<T&> auto&& fn)`
+  : Modifies the value in-place.
 
 * `Awaitable<T> auto Value<T>::untilMatches(std::invocable<const T&> auto&& pred)`
   : Suspends the caller until the stored value matches the predicate
@@ -630,6 +656,16 @@ thereof, satisfies a given condition.
 * `Awaitable<std::pair<T, T>> auto Value<T>::untilChanged()`
   : Same as above, but waits for any nontrivial transition (change from
   `x` to `y` where `x != y`).
+
+* `T::operator++()` _etc_
+  : Proxies the operator to the underlying value, triggering any awaiters as appropriate.
+
+* `Comparision operator==(auto&& rhs)` _etc_
+  : Returns a proxy object which is convertible to bool (`bool b = (v == 42)`)
+  or can be turned into an awaitable through `until()` friend function (`co_await until(v == 42)`).
+
+* `bool operator==(auto&& rhs) const` _etc_
+  : Proxies the comparison to the underlying value.
 
 ### Channel<T>
 
