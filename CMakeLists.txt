@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(corral VERSION 1.0.0)
+set(THE_CORRAL_VERSION 1.0.0)
 
 if(CORRAL_TEST_INSTALLED_VERSION)
-  find_package(corral ${PROJECT_VERSION} REQUIRED)
+  find_package(corral ${THE_CORRAL_VERSION} REQUIRED)
 
   message("corral_FOUND: ${corral_FOUND}")
 
@@ -20,6 +20,8 @@ if(CORRAL_TEST_INSTALLED_VERSION)
   target_link_libraries(dummy_target2 INTERFACE PkgConfig::corral)
   return()
 endif()
+
+project(corral VERSION ${THE_CORRAL_VERSION})
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -149,7 +151,7 @@ install(
 )
 
 file(WRITE "${CMAKE_BINARY_DIR}/${PROJECT_NAME}Config.cmake.in"
-     "@PACKAGE_INIT@"
+  "@PACKAGE_INIT@\ninclude(\$\{CMAKE_CURRENT_LIST_DIR\}/${PROJECT_NAME}Targets.cmake)"
 )
 
 configure_package_config_file(
