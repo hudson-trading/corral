@@ -553,7 +553,7 @@ template <class T> decltype(auto) getAwaiter(T&& t) {
     // clang-format off
     if constexpr (requires() { {std::forward<T>(t)} -> Awaiter; }) {
         staticAwaiterCheck<T>();
-        return std::forward<T>(t);        
+        return std::forward<T>(t);
     } else if constexpr (requires() {
             {std::forward<T>(t).operator co_await()} -> Awaiter; }) {
         using Ret = decltype(std::forward<T>(t).operator co_await());
@@ -669,6 +669,8 @@ template <class T, class Awaiter = AwaiterType<T>> struct SanitizedAwaiter {
     Awaiter awaiter_;
 };
 
+template <class T>
+SanitizedAwaiter(T&&) -> SanitizedAwaiter<T>;
 
 template <class T, class... Args> class AwaiterMaker {
   public:

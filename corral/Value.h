@@ -38,6 +38,8 @@ template <class T> class Value {
     template <class Fn> class UntilMatches;
     template <class Fn> class UntilChanged;
 
+    template <class Fn> class Comparison;
+
   public:
     Value() = default;
     explicit Value(T value) : value_(std::move(value)) {}
@@ -50,6 +52,13 @@ template <class T> class Value {
 
     void set(T value);
     Value& operator=(T value);
+
+    /// Runs `fn` on a stored value (which can modify it in-place),
+    /// then wakes up awaiters as appropriate.
+    ///
+    /// Returns the modified value (which may be different from the stored
+    /// one if any immediately resumed awaiters modified it further).
+    T modify(std::invocable<T&> auto&& fn);
 
 
     /// Suspends the caller until the stored value matches the predicate.
@@ -93,6 +102,107 @@ template <class T> class Value {
         });
     }
 
+    // Shorthands for comparison operations.
+    // Each of these yields an object which is convertible to bool,
+    // but also can yield an awaitable through a friend `until()` function:
+    //
+    //     corral::Value<int> v;
+    //     bool b = (v >= 42);  // works
+    //     co_await until(v >= 42);  // also works
+    //
+    // Note that unlike `untilMatches()` above, such awaitables do not yield
+    // the value which triggered the resumption.
+#define CORRAL_DEFINE_COMPARISON_OP(op)                                        \
+    template <class U>                                                         \
+        requires(requires(const T t, const U u) {                              \
+            { t op u } -> std::convertible_to<bool>;                           \
+        })                                                                     \
+    auto operator op(U&& u) {                                                  \
+        return makeComparison([u](const T& t) { return t op u; });             \
+    }                                                                          \
+                                                                               \
+    template <class U>                                                         \
+        requires(requires(const T t, const U u) {                              \
+            { t op u } -> std::convertible_to<bool>;                           \
+        })                                                                     \
+    bool operator op(U&& u) const {                                            \
+        return value_ op std::forward<U>(u);                                   \
+    }
+
+    CORRAL_DEFINE_COMPARISON_OP(==)
+    CORRAL_DEFINE_COMPARISON_OP(!=)
+    CORRAL_DEFINE_COMPARISON_OP(<)
+    CORRAL_DEFINE_COMPARISON_OP(<=)
+    CORRAL_DEFINE_COMPARISON_OP(>)
+    CORRAL_DEFINE_COMPARISON_OP(>=)
+#undef CORRAL_DEFINE_COMPARISON_OP
+
+    template <class U>
+        requires(requires(const T t, const U u) { t <=> u; })
+    auto operator<=>(U&& rhs) const {
+        return value_ <=> std::forward<U>(rhs);
+    }
+
+    //
+    // Shorthands proxying arithmetic operations to the stored value.
+    //
+
+    T operator++()
+        requires(requires(T t) { ++t; })
+    {
+        return modify([](T& v) { ++v; });
+    }
+
+    T operator++(int)
+        requires(requires(T t) { t++; })
+    {
+        auto ret = value_;
+        modify([](T& v) { ++v; });
+        return ret;
+    }
+
+    T operator--()
+        requires(requires(T t) { --t; })
+    {
+        return modify([](T& v) { --v; });
+    }
+
+    T operator--(int)
+        requires(requires(T t) { t--; })
+    {
+        auto ret = value_;
+        modify([](T& v) { --v; });
+        return ret;
+    }
+
+#define CORRAL_DEFINE_ARITHMETIC_OP(op)                                        \
+    template <class U>                                                         \
+    T operator op(U&& rhs)                                                     \
+        requires(requires(T t, U u) { t op u; })                               \
+    {                                                                          \
+        return modify([&rhs](T& v) { v op std::forward<U>(rhs); });            \
+    }
+
+    CORRAL_DEFINE_ARITHMETIC_OP(+=)
+    CORRAL_DEFINE_ARITHMETIC_OP(-=)
+    CORRAL_DEFINE_ARITHMETIC_OP(*=)
+    CORRAL_DEFINE_ARITHMETIC_OP(/=)
+    CORRAL_DEFINE_ARITHMETIC_OP(%=)
+    CORRAL_DEFINE_ARITHMETIC_OP(&=)
+    CORRAL_DEFINE_ARITHMETIC_OP(|=)
+    CORRAL_DEFINE_ARITHMETIC_OP(^=)
+    CORRAL_DEFINE_ARITHMETIC_OP(<<=)
+    CORRAL_DEFINE_ARITHMETIC_OP(>>=)
+
+#undef CORRAL_DEFINE_ARITHMETIC_OP
+
+  private:
+    template <class Fn> Comparison<Fn> makeComparison(Fn&& fn) {
+        // gcc-14 fails to CTAD Comparison signature here,
+        // so wrap its construction into a helper function.
+        return Comparison<Fn>(*this, std::forward<Fn>(fn));
+    }
+
   private:
     T value_;
     detail::IntrusiveList<AwaiterBase> parked_;
@@ -121,12 +231,19 @@ class Value<T>::AwaiterBase
     explicit AwaiterBase(Value& cond) : cond_(cond) {}
 
     void park() { cond_.parked_.push_back(*this); }
-    void doResume() { handle_.resume(); }
 
     const T& value() const noexcept { return cond_.value_; }
 
   private:
-    virtual void onChanged(const T& from, const T& to) = 0;
+    virtual bool matches(const T& from, const T& to) = 0;
+
+    void onChanged(const T& from, const T& to) {
+        if (matches(from, to)) {
+            handle_.resume();
+        } else {
+            park();
+        }
+    }
 
   private:
     Value<T>& cond_;
@@ -149,18 +266,48 @@ class Value<T>::UntilMatches : public AwaiterBase {
     T await_resume() && { return std::move(*result_); }
 
   private:
-    void onChanged(const T& from, const T& to) override {
+    bool matches(const T& /*from*/, const T& to) override {
         if (fn_(to)) {
             result_ = to;
-            this->doResume();
+            return true;
         } else {
-            this->park();
+            return false;
         }
     }
 
   private:
     CORRAL_NO_UNIQUE_ADDR Fn fn_;
     std::optional<T> result_;
+};
+
+template <class T> template <class Fn> class Value<T>::Comparison {
+    class Awaiter : public AwaiterBase {
+      public:
+        Awaiter(Value& cond, Fn fn) : AwaiterBase(cond), fn_(std::move(fn)) {}
+        bool await_ready() const noexcept { return fn_(this->value()); }
+        void await_resume() {}
+
+      private:
+        bool matches(const T& /*from*/, const T& to) override {
+            return fn_(to);
+        }
+
+      private:
+        Fn fn_;
+    };
+
+  public:
+    Comparison(Value& cond, Fn fn) : cond_(cond), fn_(std::move(fn)) {}
+
+    operator bool() const noexcept { return fn_(cond_.value_); }
+
+    friend Awaiter until(Comparison&& self) {
+        return Awaiter(self.cond_, std::move(self.fn_));
+    }
+
+  private:
+    Value& cond_;
+    Fn fn_;
 };
 
 
@@ -175,12 +322,12 @@ class Value<T>::UntilChanged : public AwaiterBase {
     std::pair<T, T> await_resume() && { return std::move(*result_); }
 
   private:
-    void onChanged(const T& from, const T& to) override {
+    bool matches(const T& from, const T& to) override {
         if (fn_(from, to)) {
             result_ = std::make_pair(from, to);
-            this->doResume();
+            return true;
         } else {
-            this->park();
+            return false;
         }
     }
 
@@ -190,8 +337,10 @@ class Value<T>::UntilChanged : public AwaiterBase {
 };
 
 
-template <class T> void Value<T>::set(T value) {
-    T prev = std::exchange(value_, value);
+template <class T> T Value<T>::modify(std::invocable<T&> auto&& fn) {
+    T prev = value_;
+    std::forward<decltype(fn)>(fn)(value_);
+    T value = value_;
     auto parked = std::move(parked_);
     while (!parked.empty()) {
         auto& p = parked.front();
@@ -202,6 +351,11 @@ template <class T> void Value<T>::set(T value) {
         // awaiting tasks, which could cause `value_` to change further.
         p.onChanged(prev, value);
     }
+    return value;
+}
+
+template <class T> void Value<T>::set(T value) {
+    modify([&](T& v) { v = std::move(value); });
 }
 
 template <class T> Value<T>& Value<T>::operator=(T value) {
