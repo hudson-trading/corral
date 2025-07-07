@@ -264,7 +264,7 @@ struct Channel : public detail::channel::ReadHalf<T>,
             return 0;
         }
         if (!bounded_ && !closed_) {
-            return std::numeric_limits<size_t>::max();
+            return static_cast<size_t>(-1);
         }
         return buf_.capacity() - buf_.size();
     }
