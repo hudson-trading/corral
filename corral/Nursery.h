@@ -170,7 +170,7 @@ class BasicNursery
 
     friend detail::NurseryOpener;
 
-  protected:
+  public:
     using Policy = PolicyT;
     using TaskReturnType = detail::PolicyReturnTypeFor<PolicyT, void>;
 
@@ -355,7 +355,7 @@ class BasicUnsafeNursery final : public BasicNursery<Policy>, private Executor {
     /// new parent to the nursery's children, etc. Once join() returns,
     /// the nursery is closed and any attempt to submit more tasks to it
     /// will produce undefined behavior.
-    corral::Awaitable<TaskReturnType> auto join();
+    corral::Awaitable/*<TaskReturnType>*/ auto join();
 
     // Allow the nursery itself to be an introspection root for its executor
     void await_introspect(detail::TaskTreeCollector& c) const noexcept {
@@ -1018,7 +1018,7 @@ class NurseryJoinAwaiter
 } // namespace detail
 
 template <class Policy>
-Awaitable<typename BasicNursery<Policy>::TaskReturnType> auto
+Awaitable/*<typename BasicNursery<Policy>::TaskReturnType>*/ auto
 BasicUnsafeNursery<Policy>::join() {
     return detail::NurseryJoinAwaiter(*this);
 }
@@ -1117,7 +1117,7 @@ class BackreferencedNursery final : public BasicNursery<Policy> {
         return BasicNursery<Policy>::continuation(p);
     }
 
-    corral::Awaitable<PolicyReturnTypeFor<Policy, void>> auto join() {
+    corral::Awaitable/*<PolicyReturnTypeFor<Policy, void>>*/ auto join() {
         return detail::NurseryJoinAwaiter(*this);
     }
 

@@ -81,7 +81,7 @@ class ReadHalf : public corral::detail::ParkingLotImpl<ReadHalf<T>> {
     };
 
   public:
-    corral::Awaitable<std::optional<T>> auto receive() {
+    corral::Awaitable/*<std::optional<T>>*/ auto receive() {
         return ReadAwaiter(*this);
     }
     std::optional<T> tryReceive() {
@@ -300,7 +300,7 @@ struct Channel : public detail::channel::ReadHalf<T>,
     /// Retrieve and return an object from the channel, blocking if no objects
     /// are immediately available. Returns std::nullopt if the channel is
     /// closed and has no objects left to read.
-    corral::Awaitable<std::optional<T>> auto receive() {
+    corral::Awaitable/*<std::optional<T>>*/ auto receive() {
         return readHalf().receive();
     }
 

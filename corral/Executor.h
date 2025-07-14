@@ -396,7 +396,7 @@ inline Awaitable<Executor*> auto getExecutor() {
 
 /// Obtains the current task tree.
 template <std::output_iterator<TreeDumpElement> OutIt>
-Awaitable<OutIt> auto dumpTaskTree(OutIt out) {
+Awaitable/*<OutIt>*/ auto dumpTaskTree(OutIt out) {
     return detail::CollectTreeImpl<OutIt>(out);
 }
 

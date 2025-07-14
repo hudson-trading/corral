@@ -68,10 +68,10 @@ template <class T> class Value {
     /// stored in the class may have changed since the caller was scheduled
     /// to resume.
     template <std::invocable<const T&> Fn>
-    Awaitable<T> auto untilMatches(Fn&& predicate);
+    Awaitable/*<T>*/ auto untilMatches(Fn&& predicate);
 
     /// Same as above, but accepting an expected value instead.
-    Awaitable<T> auto untilEquals(T expected) {
+    Awaitable/*<T>*/ auto untilEquals(T expected) {
         return untilMatches([expected = std::move(expected)](const T& value) {
             return value == expected;
         });
@@ -88,14 +88,14 @@ template <class T> class Value {
     /// the predicate, even though the value stored in the class may have
     /// changed since the caller was scheduled to resume.
     template <std::invocable<const T& /*from*/, const T& /*to*/> Fn>
-    Awaitable<std::pair<T, T>> auto untilChanged(Fn&& predicate);
+    Awaitable/*<std::pair<T, T>>*/ auto untilChanged(Fn&& predicate);
 
     /// Shorthands to the above.
-    Awaitable<std::pair<T, T>> auto untilChanged() {
+    Awaitable/*<std::pair<T, T>>*/ auto untilChanged() {
         return untilChanged(
                 [](const T& from, const T& to) { return from != to; });
     }
-    Awaitable<std::pair<T, T>> auto untilChanged(T from, T to) {
+    Awaitable/*<std::pair<T, T>>*/ auto untilChanged(T from, T to) {
         return untilChanged([from = std::move(from),
                              to = std::move(to)](const T& f, const T& t) {
             return f == from && t == to;
@@ -365,13 +365,13 @@ template <class T> Value<T>& Value<T>::operator=(T value) {
 
 template <class T>
 template <std::invocable<const T&> Fn>
-Awaitable<T> auto Value<T>::untilMatches(Fn&& predicate) {
+Awaitable/*<T>*/ auto Value<T>::untilMatches(Fn&& predicate) {
     return UntilMatches<Fn>(*this, std::forward<Fn>(predicate));
 }
 
 template <class T>
 template <std::invocable<const T& /*from*/, const T& /*to*/> Fn>
-Awaitable<std::pair<T, T>> auto Value<T>::untilChanged(Fn&& predicate) {
+Awaitable/*<std::pair<T, T>>*/ auto Value<T>::untilChanged(Fn&& predicate) {
     return UntilChanged<Fn>(*this, std::forward<Fn>(predicate));
 }
 

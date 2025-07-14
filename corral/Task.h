@@ -54,7 +54,7 @@ template <class T = void> class [[nodiscard]] Task : public detail::TaskTag {
 
     /// co_await'ing on a task starts it and suspends the caller until its
     /// completion.
-    Awaiter<T> auto operator co_await() noexcept {
+    Awaiter/*<T>*/ auto operator co_await() noexcept {
         return detail::TaskAwaiter<T>(promise_.get());
     }
 
@@ -127,7 +127,7 @@ inline Awaitable<void> auto noop() {
 }
 
 /// Create a task that immediately returns a given value when co_await'ed.
-template <class T> Awaitable<T> auto just(T value) {
+template <class T> Awaitable/*<T>*/ auto just(T value) {
     return detail::ReadyAwaiter<T>(std::forward<T>(value));
 }
 
