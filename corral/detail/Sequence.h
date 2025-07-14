@@ -167,7 +167,7 @@ class Sequence : private ProxyFrame, private Noncopyable {
         return std::holds_alternative<Executor*>(second_);
     }
     bool inSecondStage() const noexcept {
-        return std::holds_alternative<SecondStage>(second_);
+        return !second_monostate_ && std::holds_alternative<SecondStage>(second_);
     }
 
     SecondStage& second() noexcept { return std::get<SecondStage>(second_); }
@@ -196,10 +196,13 @@ class Sequence : private ProxyFrame, private Noncopyable {
 #if __cpp_exceptions
         try {
 #endif
+            second_monostate_ = true;
             second_.template emplace<SecondStage>(this);
+            second_monostate_ = false;
 #if __cpp_exceptions
         } catch (...) {
             second_.template emplace<exception_ptr>(current_exception());
+            second_monostate_ = false;
             parent_.resume();
             return;
         }
@@ -235,6 +238,7 @@ class Sequence : private ProxyFrame, private Noncopyable {
                          exception_ptr>  // first stage threw an exception
             second_;
     bool cancelling_ = false;
+    bool second_monostate_ = false;
 };
 
 template <class ThenFn> class SequenceBuilder {
