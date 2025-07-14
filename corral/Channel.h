@@ -105,7 +105,7 @@ class ReadHalf : public corral::detail::ParkingLotImpl<ReadHalf<T>> {
     ~ReadHalf() = default;
 
     bool hasWaiters() const noexcept {
-        return !this->template ParkingLotImpl<ReadHalf<T>>::empty();
+        return !ParkingLotImpl<ReadHalf<T>>::empty();
     }
 };
 
@@ -181,7 +181,7 @@ class WriteHalf : public corral::detail::ParkingLotImpl<WriteHalf<T>> {
     ~WriteHalf() = default;
 
     bool hasWaiters() const noexcept {
-        return !this->template ParkingLotImpl<WriteHalf<T>>::empty();
+        return !ParkingLotImpl<WriteHalf<T>>::empty();
     }
 };
 
