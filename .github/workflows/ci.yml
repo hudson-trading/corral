@@ -105,7 +105,7 @@ jobs:
               sudo env PYTHONUNBUFFERED=1 ./vsdownload.py --accept-license --dest /opt/msvc
               sudo ./install.sh /opt/msvc
 
-            cmake_flags: -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_LINKER=link -DCMAKE_CXX_FLAGS_DEBUG="/MT /Zi /Ob0 /Od /RTC1" -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+            cmake_flags: -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_LINKER=link -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
             env: PATH=/opt/msvc/bin/x64:$PATH
             cc: cl
             cxx: cl
