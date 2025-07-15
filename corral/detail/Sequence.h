@@ -49,14 +49,18 @@ class Sequence : private ProxyFrame, private Noncopyable {
             decltype(getSecond(std::declval<ThenFn&>(),
                                std::declval<AwaitableReturnType<First>&>()));
 
+    enum class Stage : uint8_t { None, FirstStage, SecondStage, Exception };
+
   public:
     Sequence(First first, ThenFn thenFn)
       : first_(std::move(first)), thenFn_(std::move(thenFn)) {}
 
+    ~Sequence() { switchTo<Stage::None>(); }
+
     bool await_ready() const noexcept { return false; }
 
     void await_set_executor(Executor* e) noexcept {
-        second_ = e;
+        switchTo<Stage::FirstStage>(e);
         first_.awaiter.await_set_executor(e);
     }
 
@@ -86,7 +90,7 @@ class Sequence : private ProxyFrame, private Noncopyable {
         if (inFirstStage()) {
             return first_.awaiter.await_cancel(this->toHandle());
         } else if (inSecondStage()) {
-            return second().awaiter.await_cancel(h);
+            return secondStage_.awaiter.await_cancel(h);
         } else {
             return false; // will carry out cancellation later
         }
@@ -103,12 +107,14 @@ class Sequence : private ProxyFrame, private Noncopyable {
         // should return false here without consulting the awaitable further.
         // Similarly, if we're in neither the first nor the second stage,
         // the second stage must have completed via early cancellation.
-        bool ret = std::holds_alternative<exception_ptr>(second_) ||
-                   (inSecondStage() && second().awaiter.await_must_resume());
+        bool ret =
+                (stage_ == Stage::Exception) ||
+                (inSecondStage() && secondStage_.awaiter.await_must_resume());
         if (!ret && inSecondStage()) {
             // Destroy the second stage, which will release any resources
             // it might have held
-            second_.template emplace<std::monostate>();
+            stage_ = Stage::None;
+            secondStage_.~SecondStage();
         }
         return ret;
     }
@@ -116,13 +122,14 @@ class Sequence : private ProxyFrame, private Noncopyable {
     decltype(auto) await_resume() {
         ScopeGuard guard([this] {
             // Destroy the second stage and the return value of the first stage
-            second_.template emplace<std::monostate>();
+            switchTo<Stage::None>();
         });
 
-        if (auto ex = std::get_if<exception_ptr>(&second_)) {
-            rethrow_exception(*ex);
+        if (stage_ == Stage::Exception) {
+            rethrow_exception(exception_);
         } else {
-            return second().awaiter.await_resume();
+            CORRAL_ASSERT(inSecondStage());
+            return secondStage_.awaiter.await_resume();
         }
     }
 
@@ -130,7 +137,7 @@ class Sequence : private ProxyFrame, private Noncopyable {
         if (inFirstStage()) {
             first_.awaiter.await_introspect(c);
         } else if (inSecondStage()) {
-            second().awaiter.await_introspect(c);
+            secondStage_.awaiter.await_introspect(c);
         } else {
             c.node("sequence (degenerate)", this);
         }
@@ -163,17 +170,8 @@ class Sequence : private ProxyFrame, private Noncopyable {
             awaiter(std::forward<Second>(awaitable)) {}
     };
 
-    bool inFirstStage() const noexcept {
-        return std::holds_alternative<Executor*>(second_);
-    }
-    bool inSecondStage() const noexcept {
-        return std::holds_alternative<SecondStage>(second_);
-    }
-
-    SecondStage& second() noexcept { return std::get<SecondStage>(second_); }
-    const SecondStage& second() const noexcept {
-        return std::get<SecondStage>(second_);
-    }
+    bool inFirstStage() const noexcept { return stage_ == Stage::FirstStage; }
+    bool inSecondStage() const noexcept { return stage_ == Stage::SecondStage; }
 
     void kickOffSecond() noexcept {
         if (cancelling_ && !first_.awaiter.await_must_resume()) {
@@ -187,39 +185,56 @@ class Sequence : private ProxyFrame, private Noncopyable {
         CORRAL_TRACE("sequence %p%s first stage completed, continuing with...",
                      this, cancelling_ ? " (cancelling)" : "");
         CORRAL_ASSERT(inFirstStage());
-        Executor* ex = std::get<Executor*>(second_);
-
-        // Mark first stage as completed
-        // (this is necessary if thenFn_() attempts to cancel us)
-        second_.template emplace<std::monostate>();
+        Executor* ex = executor_;
 
 #if __cpp_exceptions
         try {
 #endif
-            second_.template emplace<SecondStage>(this);
+            switchTo<Stage::SecondStage>(this);
+
 #if __cpp_exceptions
         } catch (...) {
-            second_.template emplace<exception_ptr>(current_exception());
+            switchTo<Stage::Exception>(current_exception());
             parent_.resume();
             return;
         }
 #endif
 
         if (cancelling_) {
-            if (second().awaiter.await_early_cancel()) {
-                second_.template emplace<std::monostate>();
+            if (secondStage_.awaiter.await_early_cancel()) {
+                switchTo<Stage::None>();
 
                 parent_.resume();
                 return;
             }
         }
 
-        if (second().awaiter.await_ready()) {
+        if (secondStage_.awaiter.await_ready()) {
             parent_.resume();
         } else {
-            second().awaiter.await_set_executor(ex);
-            second().awaiter.await_suspend(parent_).resume();
+            secondStage_.awaiter.await_set_executor(ex);
+            secondStage_.awaiter.await_suspend(parent_).resume();
         }
+    }
+
+    template <Stage NewStage, class... Args> void switchTo(Args&&... args) {
+        Stage oldStage = std::exchange(stage_, Stage::None);
+
+        if (oldStage == Stage::SecondStage) {
+            secondStage_.~SecondStage();
+        } else if (oldStage == Stage::Exception) {
+            exception_.~exception_ptr();
+        }
+
+        if constexpr (NewStage == Stage::FirstStage) {
+            new (&executor_) Executor*(std::forward<Args>(args)...);
+        } else if constexpr (NewStage == Stage::SecondStage) {
+            new (&secondStage_) SecondStage(std::forward<Args>(args)...);
+        } else if constexpr (NewStage == Stage::Exception) {
+            new (&exception_) std::exception_ptr(std::forward<Args>(args)...);
+        }
+
+        stage_ = NewStage;
     }
 
   private:
@@ -227,14 +242,14 @@ class Sequence : private ProxyFrame, private Noncopyable {
     CORRAL_NO_UNIQUE_ADDR FirstStage first_;
 
     CORRAL_NO_UNIQUE_ADDR ThenFn thenFn_;
-    mutable std::variant<Executor*,      // running first stage
-                         SecondStage,    // running second stage,
-                         std::monostate, // running neither (either constructing
-                                         // second stage, or it confirmed early
-                                         // cancellation)
-                         exception_ptr>  // first stage threw an exception
-            second_;
+
+    union {
+        Executor* executor_;              // valid if stage_ == FirstStage
+        mutable SecondStage secondStage_; // valid if stage_ == SecondStage
+        std::exception_ptr exception_;    // valid if stage_ == Exception
+    };
     bool cancelling_ = false;
+    mutable Stage stage_ = Stage::None;
 };
 
 template <class ThenFn> class SequenceBuilder {

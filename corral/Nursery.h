@@ -60,7 +60,7 @@ class TaskStartedTag {
     explicit constexpr TaskStartedTag(TagCtor) {}
 };
 
-template <class NurseryT> class NurseryJoinAwaiter;
+template <class NurseryT, class Policy> class NurseryJoinAwaiter;
 template <class Derived, class Policy> class NurseryParentAwaiter;
 template <class Ret> class TaskStartedSink;
 template <class Poilicy, class Ret, class Callable, class... Args>
@@ -164,7 +164,7 @@ class BasicNursery
     using NurseryBase = detail::NurseryBase;
 
     template <class, class> friend class detail::NurseryParentAwaiter;
-    template <class> friend class detail::NurseryJoinAwaiter;
+    template <class, class> friend class detail::NurseryJoinAwaiter;
     template <class, class, class, class...>
     friend class detail::NurseryStartAwaiter;
 
@@ -979,12 +979,10 @@ template <class Derived, class Policy> class NurseryParentAwaiter {
     }
 };
 
-template <class NurseryT>
+template <class NurseryT, class Policy>
 class NurseryJoinAwaiter
-  : public NurseryParentAwaiter<NurseryJoinAwaiter<NurseryT>,
-                                typename NurseryT::Policy> {
-    friend NurseryParentAwaiter<NurseryJoinAwaiter<NurseryT>,
-                                typename NurseryT::Policy>;
+  : public NurseryParentAwaiter<NurseryJoinAwaiter<NurseryT, Policy>, Policy> {
+    friend NurseryParentAwaiter<NurseryJoinAwaiter<NurseryT, Policy>, Policy>;
     friend NurseryT;
 
     NurseryT& nursery_;
@@ -993,8 +991,7 @@ class NurseryJoinAwaiter
 
   public:
     ~NurseryJoinAwaiter()
-        requires(std::derived_from<NurseryT,
-                                   BasicNursery<typename NurseryT::Policy>>)
+        requires(std::derived_from<NurseryT, BasicNursery<Policy>>)
     = default;
 
     bool await_ready() const noexcept {
@@ -1020,7 +1017,8 @@ class NurseryJoinAwaiter
 template <class Policy>
 Awaitable<typename BasicNursery<Policy>::TaskReturnType> auto
 BasicUnsafeNursery<Policy>::join() {
-    return detail::NurseryJoinAwaiter(*this);
+    return detail::NurseryJoinAwaiter<BasicUnsafeNursery<Policy>, Policy>(
+            *this);
 }
 
 //
@@ -1101,7 +1099,7 @@ namespace detail {
 template <class Policy>
 class BackreferencedNursery final : public BasicNursery<Policy> {
     friend NurseryOpener;
-    friend NurseryJoinAwaiter<BackreferencedNursery<Policy>>;
+    friend NurseryJoinAwaiter<BackreferencedNursery<Policy>, Policy>;
 
   private /*methods*/:
     BackreferencedNursery(Executor* executor, BasicNursery<Policy>*& backref)
@@ -1118,7 +1116,8 @@ class BackreferencedNursery final : public BasicNursery<Policy> {
     }
 
     corral::Awaitable<PolicyReturnTypeFor<Policy, void>> auto join() {
-        return detail::NurseryJoinAwaiter(*this);
+        return detail::NurseryJoinAwaiter<BackreferencedNursery<Policy>,
+                                          Policy>(*this);
     }
 
     void await_introspect(detail::TaskTreeCollector& c) const noexcept {

@@ -54,12 +54,17 @@ concept Awaiter = requires(T t, const T ct, Handle h) {
     { ct.await_ready() } noexcept -> std::same_as<bool>;
     { t.await_suspend(h) } -> detail::convertible_to_any<void, bool, Handle>;
     { std::forward<T>(t).await_resume() };
-} && (std::is_same_v<Ret, detail::Unspecified> || requires(T t) {
+}
+#if !defined(__GNUC__) || defined(__llvm__) || __GNUC__ >= 11
+  // gcc-10.2 fails to process the below
+  && (std::is_same_v<Ret, detail::Unspecified> || requires(T t) {
     { std::forward<T>(t).await_resume() } -> std::convertible_to<Ret>;
-});
+})
+#endif
+;
 
 template <class T, class Ret = detail::Unspecified>
-concept Awaitable = 
+concept Awaitable =
     Awaiter<T, Ret>
     || requires(T t) {
         { std::forward<T>(t).operator co_await() } -> Awaiter<Ret>;

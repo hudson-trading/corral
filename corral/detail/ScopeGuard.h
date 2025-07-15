@@ -35,7 +35,7 @@ template <class Fn> class ScopeGuard {
     ScopeGuard(Fn fn) : fn_(std::move(fn)) {}
     ScopeGuard(ScopeGuard&&) = delete;
     ScopeGuard& operator=(ScopeGuard&&) = delete;
-    ~ScopeGuard() noexcept(noexcept(fn_())) { fn_(); }
+    ~ScopeGuard() { fn_(); }
 
   private:
     CORRAL_NO_UNIQUE_ADDR Fn fn_;
