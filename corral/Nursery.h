@@ -98,6 +98,8 @@ class NurseryBase : private Noncopyable {
     Handle parent_ = nullptr;
 
     template <class Ret> friend class detail::TaskStartedSink;
+
+    struct ArgConverter;
 };
 
 struct NurseryOpener;
@@ -734,6 +736,63 @@ inline void NurseryBase::cancel() {
     doCancel();
 }
 
+/// Logic to convert a value passed to Nursery::start() ["Supplied"]
+/// into some object that will be passed as an argument when calling
+/// the async function to create the new task. The corresponding
+/// function parameter type is the template argument "Taken".
+/// The value returned by convert() will live as long as the new task
+/// does, but the value passed to convert() will not, so any
+/// temporary materialization needs to happen explicitly here.
+/// This whole thing is a workaround for gcc-15's inability to
+/// write a call through a member function pointer in the same
+/// full-expression as a `co_await`.
+struct NurseryBase::ArgConverter {
+    // If the task takes a non-reference parameter, construct it now.
+    // (e.g.: Supplied const char* -> Taken std::string)
+    template <class Taken, class Supplied>
+        requires(!std::is_reference_v<Taken>)
+    static Taken convert(Supplied&& arg) {
+        return std::forward<Supplied>(arg);
+    }
+
+    // If the task takes a reference parameter, and the user supplied
+    // a std::reference_wrapper, pass the reference_wrapper so that
+    // the task will receive a reference to the user's original
+    // object. The reference_wrapper acts as a signal that the user
+    // is aware of any potential lifetime issues.
+    template <class Taken, class Supplied>
+        requires(std::is_reference_v<Taken> && is_reference_wrapper_v<Supplied>)
+    static Supplied convert(Supplied arg) {
+        return arg;
+    }
+
+    // If the task takes a reference parameter other than
+    // non-const lvalue reference, and the user did not supply a
+    // std::reference_wrapper, create an object that the reference
+    // can bind to. (This is the case where it's important that
+    // we do this ArgConverter dance.)
+    template <class Taken, class Supplied>
+        requires((is_const_reference_v<Taken> ||
+                  std::is_rvalue_reference_v<Taken>) &&
+                 !is_reference_wrapper_v<Supplied>)
+    static std::decay_t<Taken> convert(Supplied&& supplied) {
+        return std::forward<Supplied>(supplied);
+    }
+
+    // If the task takes a non-const lvalue reference, require
+    // the use of std::reference_wrapper. We shouldn't make a copy
+    // because it would hide modifications made by the task.
+    template <class Taken, class Supplied>
+        requires(std::is_lvalue_reference_v<Taken> &&
+                 !is_const_reference_v<Taken> &&
+                 !is_reference_wrapper_v<Supplied>)
+    static void convert(Supplied&&) {
+        static_assert(!std::is_same_v<Taken, Taken>,
+                      "arguments to functions taken by reference "
+                      "should be passed through std::ref()");
+    }
+};
+
 } // namespace detail
 
 
@@ -777,12 +836,21 @@ BasicNursery<Policy>::makePromise(Callable callable, Args... args) {
         // captures) will be kept alive as an argument of the new
         // async function.
 
-        // Note: cannot use `std::invoke()` here, as any temporaries
-        // created inside it will be destroyed before `invoke()` returns.
-        // We need funciton call and `co_await` inside one statement,
-        // so mimic `std::invoke()` logic here.
         if constexpr (std::is_member_pointer_v<Callable>) {
-            ret = [](Callable c, auto obj, auto... a) -> Ret {
+            // gcc-15 ICEs on `co_await (obj->*fun)(std::move(args)...)`
+            // (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=121094),
+            // so we have to split this in two full expressions to work around
+            // the ICE. This, however, may bring the issue of lifetime of any
+            // constructed temporaries (like calling a function taking a `const
+            // std::string&` with a const char*), so use some dirty TMP
+            // to manually convert arguments to those of necessary types,
+            // so we can be sure that if a function takes a reference,
+            // no temporary will be constructed during its invocation.
+
+            auto tup = std::forward_as_tuple<Args...>(std::move(args)...);
+            using Sig = detail::CallableSignature<Callable>;
+
+            auto body = [](Callable c, auto obj, auto... a) -> Ret {
                 if constexpr (std::is_same_v<PassedReturnType, detail::Void> ||
                               std::is_same_v<TaskReturnType, void>) {
                     // Either we are given a void-returning awaitable, or we are
@@ -791,14 +859,9 @@ BasicNursery<Policy>::makePromise(Callable callable, Args... args) {
 
                     // Either exceptions are used to indicate failure
                     // (in which case they will auto-propagate)...
-                    if constexpr (std::is_pointer_v<decltype(obj)>) {
-                        co_await (obj->*c)(std::move(a)...);
-                    } else if constexpr (detail::is_reference_wrapper_v<
-                                                 decltype(obj)>) {
-                        co_await (obj.get().*c)(std::move(a)...);
-                    } else {
-                        co_await (std::move(obj).*c)(std::move(a)...);
-                    }
+                    decltype(auto) awaitable =
+                            std::invoke(c, std::move(obj), std::move(a)...);
+                    co_await std::forward<decltype(awaitable)>(awaitable);
 
                     // ...or the task is infallible, so return an indication
                     // of success in the used policy.
@@ -809,20 +872,30 @@ BasicNursery<Policy>::makePromise(Callable callable, Args... args) {
                 } else {
                     // The awaitable indicates its success or failure through
                     // returning a value, so simply pass it further up.
-                    if constexpr (std::is_pointer_v<decltype(obj)>) {
-                        co_return co_await (obj->*c)(std::move(a)...);
-                    } else if constexpr (detail::is_reference_wrapper_v<
-                                                 decltype(obj)>) {
-                        co_return co_await (obj.get().*c)(std::move(a)...);
-                    } else {
-                        co_return co_await (std::move(obj).*c)(std::move(a)...);
-                    }
+                    decltype(auto) awaitable =
+                            std::invoke(c, std::move(obj), std::move(a)...);
+                    co_return co_await std::forward<decltype(awaitable)>(
+                            awaitable);
                 }
-            }(std::move(callable), std::move(args)...);
+            };
+
+            ret = [&]<size_t... I>(std::index_sequence<I...>) {
+                return body(
+                        std::move(callable), std::move(std::get<0>(tup)),
+                        ArgConverter::convert<typename Sig::template Arg<I>>(
+                                std::move(std::get<I + 1>(tup)))...);
+            }(std::make_index_sequence<sizeof...(Args) - 1>{});
+
         } else {
+            // Note: we don't have to do TakenArg sorcery here,
+            // so make sure invocation of `c` and co_await'ing the result
+            // are in the same full expression, so any created temporaries
+            // will be alive while the coroutine runs.
+
             ret = [](Callable c, Args... a) -> Ret {
                 // See comments above for description of alternatives here
-                if constexpr (std::is_same_v<PassedReturnType, detail::Void>) {
+                if constexpr (std::is_same_v<PassedReturnType, detail::Void> ||
+                              std::is_same_v<TaskReturnType, void>) {
                     co_await (std::move(c))(std::move(a)...);
                     if constexpr (!std::is_same_v<TaskReturnType, void>) {
                         co_return Policy::wrapValue();

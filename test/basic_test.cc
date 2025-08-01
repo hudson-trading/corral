@@ -1115,6 +1115,112 @@ CORRAL_TEST_CASE("nursery-member-function") {
     CATCH_CHECK(t.now() == 1ms);
 }
 
+class LifetimeTracked {
+    enum class Status { Good, MovedFrom };
+    using Map = std::unordered_map<const LifetimeTracked*, Status>;
+    static Map& map() {
+        static Map m;
+        return m;
+    }
+
+    static constexpr const char* literal =
+            "a string presumably long enough to inhibit SSO";
+    std::string str_ = literal;
+
+  public:
+    void assertValid() const {
+        auto it = map().find(this);
+        CATCH_CHECK(it != map().end());
+        CATCH_CHECK(it->second == Status::Good);
+
+        // Give ASAN (or valgrind) a chance to catch a use-after-free
+        // and emit a useful message with a nice stack trace
+        CATCH_CHECK((str_ == literal));
+    }
+
+    LifetimeTracked() { map()[this] = Status::Good; }
+
+    LifetimeTracked(const LifetimeTracked& other) {
+        other.assertValid();
+        str_ = other.str_;
+        map()[this] = Status::Good;
+    }
+
+    LifetimeTracked(LifetimeTracked&& other) noexcept {
+        other.assertValid();
+        str_ = std::move(other.str_);
+        map()[this] = Status::Good;
+        map()[&other] = Status::MovedFrom;
+    }
+
+    ~LifetimeTracked() {
+        auto it = map().find(this);
+        CATCH_CHECK(it != map().end());
+        map().erase(it);
+    }
+
+    struct Maker {
+        operator LifetimeTracked() const { return LifetimeTracked(); }
+    };
+};
+
+CORRAL_TEST_CASE("nursery-member-function-lifetime") {
+    struct Test {
+        Task<void> byValue(LifetimeTracked t) {
+            t.assertValid();
+            co_return;
+        }
+        Task<void> byConstRef(const LifetimeTracked& t) {
+            t.assertValid();
+            co_return;
+        }
+        Task<void> byRef(LifetimeTracked& t) {
+            t.assertValid();
+            co_return;
+        }
+        Task<void> byRRef(LifetimeTracked&& t) {
+            t.assertValid();
+            co_return;
+        }
+
+        Task<void> moveOnly(std::unique_ptr<int> mm) {
+            CATCH_CHECK((*mm == 42));
+            co_return;
+        }
+
+        Task<void> moveOnlyByConstRef(const std::unique_ptr<int>& mm) {
+            CATCH_CHECK((*mm == 42));
+            co_return;
+        }
+    };
+
+    LifetimeTracked lt;
+    Test obj;
+    auto mm = std::make_unique<int>(42);
+
+    CORRAL_WITH_NURSERY(n) {
+        n.start(&Test::byValue, &obj, LifetimeTracked{});
+        n.start(&Test::byValue, &obj, LifetimeTracked::Maker{});
+
+        n.start(&Test::byConstRef, &obj, LifetimeTracked{});
+        n.start(&Test::byConstRef, &obj, LifetimeTracked::Maker{});
+        n.start(&Test::byConstRef, &obj, std::ref(lt));
+        n.start(&Test::byConstRef, &obj, std::cref(lt));
+
+        n.start(&Test::byRef, &obj, std::ref(lt));
+
+        n.start(&Test::byRRef, &obj, LifetimeTracked{});
+        n.start(&Test::byRRef, &obj, LifetimeTracked::Maker{});
+
+        n.start(&Test::moveOnly, &obj, std::make_unique<int>(42));
+
+        n.start(&Test::moveOnlyByConstRef, &obj, std::make_unique<int>(42));
+        n.start(&Test::moveOnlyByConstRef, &obj, std::cref(mm));
+
+        co_return join;
+    };
+}
+
 CORRAL_TEST_CASE("nursery-ret-policy") {
     auto sleep = [&](milliseconds delay) -> Task<void> {
         co_await t.sleep(delay);

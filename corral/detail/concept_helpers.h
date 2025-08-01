@@ -58,5 +58,8 @@ template <typename T>
 constexpr bool is_reference_wrapper_v =
         is_specialization_of_v<std::reference_wrapper, T>;
 
+template <typename T>
+constexpr bool is_const_reference_v =
+        std::is_reference_v<T> && std::is_const_v<std::remove_reference_t<T>>;
 
 } // namespace corral::detail
