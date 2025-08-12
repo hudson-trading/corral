@@ -25,6 +25,7 @@
 
 #pragma once
 #include "IntrusiveList.h"
+#include "PointerBits.h"
 #include "utility.h"
 
 namespace corral::detail {
@@ -40,7 +41,11 @@ template <class Self> class ParkingLotImpl {
   protected:
     class Parked : public IntrusiveListItem<Parked> {
       public:
-        explicit Parked(Self& object) : object_(object) {}
+        explicit Parked(Self& object, unsigned bits = 0)
+          : object_(&object, bits) {
+            static_assert(alignof(Self) >= alignof(void*),
+                          "adjust align of object_ PointerBits");
+        }
 
         auto await_cancel(Handle) noexcept {
             this->unlink();
@@ -49,12 +54,15 @@ template <class Self> class ParkingLotImpl {
         }
 
       protected:
-        Self& object() { return object_; }
-        const Self& object() const { return object_; }
+        Self& object() { return *object_.ptr(); }
+        const Self& object() const { return *object_.ptr(); }
+
+        unsigned bits() const { return object_.bits(); }
+        void setBits(unsigned bits) { object_.set(object_.ptr(), bits); }
 
         void doSuspend(Handle h) {
             handle_ = h;
-            object_.parked_.push_back(*this);
+            object().parked_.push_back(*this);
         }
         void unpark() {
             this->unlink();
@@ -62,7 +70,7 @@ template <class Self> class ParkingLotImpl {
         }
 
       private:
-        Self& object_;
+        PointerBits<Self, unsigned, 2, alignof(void*)> object_;
         Handle handle_;
         friend class ParkingLotImpl<Self>;
     };

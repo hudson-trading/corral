@@ -1774,22 +1774,56 @@ CORRAL_TEST_CASE("complex-noncancellable-disposable-structure") {
 }
 
 CORRAL_TEST_CASE("semaphores") {
-    Semaphore sem(5);
-    int concurrency = 0;
-    auto worker = [&]() -> Task<> {
-        auto lk = co_await sem.lock();
-        ++concurrency;
-        CATCH_CHECK(concurrency <= 5);
-        co_await t.sleep(1ms);
-        --concurrency;
-    };
-    CORRAL_WITH_NURSERY(nursery) {
-        for (int i = 0; i != 20; ++i) {
-            nursery.start(worker);
-        }
-        co_return join;
-    };
-    CATCH_CHECK(t.now() == 4ms);
+    CATCH_SECTION("smoke") {
+        Semaphore sem(5);
+        int concurrency = 0;
+        auto worker = [&]() -> Task<> {
+            auto lk = co_await sem.lock();
+            ++concurrency;
+            CATCH_CHECK(concurrency <= 5);
+            co_await t.sleep(1ms);
+            --concurrency;
+        };
+        CORRAL_WITH_NURSERY(nursery) {
+            for (int i = 0; i != 20; ++i) {
+                nursery.start(worker);
+            }
+            co_return join;
+        };
+        CATCH_CHECK(t.now() == 4ms);
+        CATCH_CHECK(sem.value() == 5);
+    }
+
+    CATCH_SECTION("acquire-race") {
+        Semaphore sem(1);
+        // Both awaitables see the semaphore as available, but only
+        // one can acquire it.
+        co_await anyOf(t.sleep(2ms), allOf(sem.acquire(), sem.acquire()));
+        CATCH_CHECK(t.now() == 2ms);
+        CATCH_CHECK(sem.value() == 0);
+    }
+
+    CATCH_SECTION("acquire-release-race") {
+        Semaphore sem(0);
+        // Semaphore awaitable's await_ready() initially returns false,
+        // but by the time its await_suspend() runs, the semaphore gets
+        // a free resource, so acquire() should complete immediately.
+        co_await allOf(
+                [&]() -> Task<> {
+                    sem.release();
+                    return noop();
+                },
+                sem.acquire());
+    }
+
+    CATCH_SECTION("not-awaited-acquire") {
+        Semaphore sem(1);
+        // acquire() is short-circuited by an immediately-ready awaitable
+        // and is not awaited, so semaphore's resource should not leak.
+        auto [_, acquired] = co_await anyOf(Ready{}, sem.acquire());
+        CATCH_CHECK(!acquired);
+        CATCH_CHECK(sem.value() == 1);
+    }
 }
 
 CORRAL_TEST_CASE("value") {

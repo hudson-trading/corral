@@ -50,6 +50,8 @@ class Semaphore : public detail::ParkingLotImpl<Semaphore> {
     /// the caller if it is currently zero.
     [[nodiscard]] corral::Awaitable<void> auto acquire();
 
+    bool tryAcquire() noexcept;
+
     /// Increments the semaphore, waking one suspended task (if any).
     void release();
 
@@ -91,30 +93,69 @@ class [[nodiscard]] Semaphore::Lock {
 template <class Retval>
 class Semaphore::Awaiter : public detail::ParkingLotImpl<Semaphore>::Parked {
   public:
-    using Parked::Parked;
-    bool await_ready() const noexcept { return this->object().value() > 0; }
+    explicit Awaiter(Semaphore& sem)
+      : Awaiter::Parked(sem, sem.tryAcquire() ? 1 : 0) {}
 
-    void await_suspend(Handle h) { this->doSuspend(h); }
+    Awaiter(const Awaiter&) = delete;
+    Awaiter& operator=(const Awaiter&) = delete;
+
+    ~Awaiter() {
+        if (borrowed()) {
+            this->object().release(); // did not need the borrow
+        }
+    }
+
+    bool await_ready() const noexcept { return borrowed(); }
+
+    bool await_suspend(Handle h) {
+        CORRAL_ASSERT(!borrowed()); // otherwise we should have bypassed
+                                    // await_suspend()
+        if (this->object().tryAcquire()) {
+            return false;
+        } else {
+            this->doSuspend(h);
+            return true;
+        }
+    }
 
     auto await_resume() {
-        --this->object().value_;
+        this->setBits(0);
         if constexpr (!std::is_same_v<Retval, void>) {
             return Retval(this->object());
         }
     }
+
+  private:
+    bool borrowed() const noexcept { return this->bits() != 0; }
 };
 
 inline corral::Awaitable<void> auto Semaphore::acquire() {
-    return Awaiter<void>(*this);
+    return makeAwaitable<Awaiter<void>>(std::ref(*this));
+}
+
+inline bool Semaphore::tryAcquire() noexcept {
+    if (value_ == 0) {
+        return false;
+    }
+    --value_;
+    return true;
 }
 
 inline corral::Awaitable<Semaphore::Lock> auto Semaphore::lock() {
-    return Awaiter<Lock>(*this);
+    return makeAwaitable<Awaiter<Lock>>(std::ref(*this));
 }
 
 inline void Semaphore::release() {
-    ++value_;
-    unparkOne();
+    if (empty()) {
+        ++value_;
+    } else {
+        // Semaphore awaiters assume that when woken the count has
+        // been decremented for them; we skip the redundant increment
+        // (here) + decrement (in Awaiter::await_resume()) in order
+        // to avoid the possibility of some other Awaiter reserving
+        // the count that we intended for this one.
+        unparkOne();
+    }
 }
 
 } // namespace corral
