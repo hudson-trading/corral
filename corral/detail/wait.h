@@ -613,11 +613,39 @@ class MuxTuple : public MuxBase<Policy, Self> {
             // have bind() called at the same time; we check the first
             // one for convenience only.)
             this->doSuspend(std::noop_coroutine());
-            auto extractResults = [this](auto&&... children) {
-                (children.bind(*static_cast<Self*>(this)), ...);
-                (children.reportImmediateResult(), ...);
+
+            std::apply(
+                    [this](auto&... children) {
+                        (children.bind(*static_cast<Self*>(this)), ...);
+                    },
+                    children_);
+
+            // Whichever child resumes first may get to cancel its siblings
+            // if we're in anyOf(), so we need to make sure we first
+            // collect the result of whichever child is ready.
+
+            size_t readyIndex = sizeof...(Awaitables);
+            auto checkIfReady = [&](size_t i, auto& child) {
+                if (child.ready()) {
+                    child.reportImmediateResult();
+                    readyIndex = i;
+                    return true;
+                } else {
+                    return false;
+                }
             };
-            std::apply(extractResults, children_);
+            [&]<size_t... I>(std::index_sequence<I...>) {
+                (checkIfReady(I, std::get<I>(children_)) || ...);
+            }(std::make_index_sequence<sizeof...(Awaitables)>{});
+            CORRAL_ASSERT(readyIndex != sizeof...(Awaitables));
+
+            // Now collect the results of the remaining children.
+            [&]<size_t... I>(std::index_sequence<I...>) {
+                ((I != readyIndex
+                          ? std::get<I>(children_).reportImmediateResult()
+                          : void()),
+                 ...);
+            }(std::make_index_sequence<sizeof...(Awaitables)>{});
         }
     }
 
@@ -903,8 +931,25 @@ class MuxRange : public MuxBase<Policy, Self> {
             for (auto& child : children()) {
                 child.helper.bind(*static_cast<Self*>(this));
             }
-            for (auto& child : children()) {
-                child.helper.reportImmediateResult();
+
+            // Whichever child resumes first may get to cancel its siblings
+            // if we're in anyOf(), so we need to make sure we first
+            // collect the result of whichever child is ready.
+
+            Child* readyChild = children_;
+            Child* end = children_ + count_;
+            while (readyChild != end && !readyChild->helper.ready()) {
+                ++readyChild;
+            }
+            CORRAL_ASSERT(readyChild != end);
+            readyChild->helper.reportImmediateResult();
+
+            // Now collect the results of the remaining children.
+            for (Child* p = children_; p != readyChild; ++p) {
+                p->helper.reportImmediateResult();
+            }
+            for (Child* p = readyChild + 1; p != end; ++p) {
+                p->helper.reportImmediateResult();
             }
         }
     }

@@ -385,12 +385,22 @@ CORRAL_TEST_CASE("anyof") {
         co_await anyOf([&]() -> Task<> { co_return; },
                        [&]() -> Task<> { co_await t.sleep(1ms); });
         CATCH_CHECK(t.now() == 0ms);
+
+        auto [a, b] = co_await anyOf(ReadyCancellable{}, t.sleep(1ms));
+        CATCH_CHECK(t.now() == 0ms);
+        CATCH_CHECK(a);
+        CATCH_CHECK(!b);
     }
 
     CATCH_SECTION("immediate-back") {
         co_await anyOf([&]() -> Task<> { co_await t.sleep(1ms); },
                        [&]() -> Task<> { co_return; });
         CATCH_CHECK(t.now() == 0ms);
+
+        auto [a, b] = co_await anyOf(t.sleep(1ms), ReadyCancellable{});
+        CATCH_CHECK(t.now() == 0ms);
+        CATCH_CHECK(!a);
+        CATCH_CHECK(b);
     }
 
     CATCH_SECTION("immediate-both") {
