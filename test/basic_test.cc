@@ -1828,6 +1828,7 @@ CORRAL_TEST_CASE("noop") {
     auto mkNoop = []() -> Task<> { return noop(); };
     co_await noop();
     co_await mkNoop();
+    co_await mkNoop;
     co_await anyOf(mkNoop(), mkNoop());
     CORRAL_WITH_NURSERY(n) {
         n.start(mkNoop);

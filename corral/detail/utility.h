@@ -422,17 +422,22 @@ template <class Callable> class AwaitableLambda {
     // NB: these forwarders are specialized for TaskAwaitable, and would
     // need generalization to support non-Task awaitables
 
-    // We know that a TaskAwaitable will be not-ready (except corral::noop(),
-    // but that one doesn't mind if you suspend on it anyway). We need to
-    // initialize the awaitable before await_resume() gets called,
-    // can't do it here since the method is const, and
-    // await_set_executor() only runs if we're going to suspend.
+    // The awaiter gets initialized lazily when co_awaiting the lambda,
+    // so await_ready() needs to return false (so await_set_executor(),
+    // which does the initialization, gets a chance to be called).
+    // If the constructed awaiter happens to be await_ready()
+    // (which currently only holds for noop()), this will be handled
+    // in await_suspend().
     bool await_ready() const noexcept { return false; }
 
     void await_set_executor(Executor* ex) noexcept {
         awaiter().await_set_executor(ex);
     }
-    auto await_suspend(Handle h) { return awaiter_.await_suspend(h); }
+
+    Handle await_suspend(Handle h) {
+        return awaiter_.await_ready() ? h : awaitSuspend(awaiter_, h);
+    }
+
     decltype(auto) await_resume() {
         return std::forward<Awaiter>(awaiter_).await_resume();
     }
@@ -669,8 +674,7 @@ template <class T, class Awaiter = AwaiterType<T>> struct SanitizedAwaiter {
     Awaiter awaiter_;
 };
 
-template <class T>
-SanitizedAwaiter(T&&) -> SanitizedAwaiter<T>;
+template <class T> SanitizedAwaiter(T&&) -> SanitizedAwaiter<T>;
 
 template <class T, class... Args> class AwaiterMaker {
   public:
