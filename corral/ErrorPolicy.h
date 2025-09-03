@@ -195,7 +195,7 @@ namespace detail {
 struct Infallible {
     using ErrorType = std::monostate;
 
-    static ErrorType fromCurrentException() noexcept { detail::unreachable(); }
+    static ErrorType fromCurrentException() noexcept { std::terminate(); }
     static bool hasError(const auto&) noexcept { return false; }
     static void terminateBy(const ErrorType&) noexcept {
         detail::unreachable();
