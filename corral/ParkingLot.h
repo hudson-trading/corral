@@ -43,6 +43,9 @@ class ParkingLot : public detail::ParkingLotImpl<ParkingLot> {
 
     using Awaitable = Awaiter; // backwards compatibility
 
+    /// Returns true if there are no parked tasks.
+    bool empty() const noexcept { return Base::empty(); }
+
     /// Returns an awaitable which, when co_await'ed, suspends the caller
     /// until any of unpark*() functions are called.
     [[nodiscard]] corral::Awaiter<void> auto park() { return Awaiter(*this); }

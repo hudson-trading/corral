@@ -458,6 +458,7 @@ class ParkingLot {
     Awaitable<void> auto park();
     void unparkOne();
     void unparkAll();
+    bool empty() const noexcept;
 };
 ```
 
@@ -475,6 +476,9 @@ it's generally not necessary).
 * `void ParkingLot::unparkAll()`
   : Resumes one or all currently parked tasks; no-op if there aren't any.
   Has no effect on any tasks `park()`ed afterwards.
+
+* `bool ParkingLot::empty() const noexcept`
+  : Returns whether there are no currently parked tasks.
 
 ### Semaphore
 

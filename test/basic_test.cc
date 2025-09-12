@@ -1773,6 +1773,42 @@ CORRAL_TEST_CASE("complex-noncancellable-disposable-structure") {
     CATCH_CHECK(t.now() == 3ms);
 }
 
+CORRAL_TEST_CASE("parking-lot") {
+    ParkingLot pl;
+    size_t running = 0;
+
+    auto task = [&]() -> Task<> {
+        co_await t.sleep(1ms);
+        co_await pl.park();
+        ++running;
+    };
+
+    CORRAL_WITH_NURSERY(nursery) {
+        for (int i = 0; i != 5; ++i) {
+            nursery.start(task);
+        }
+        CATCH_CHECK(pl.empty());
+        co_await t.sleep(2ms);
+        CATCH_CHECK(!pl.empty());
+        CATCH_CHECK(running == 0);
+
+        pl.unparkOne();
+        co_await t.sleep(1ms);
+        CATCH_CHECK(running == 1);
+
+        pl.unparkOne();
+        pl.unparkOne();
+        co_await t.sleep(1ms);
+        CATCH_CHECK(running == 3);
+
+        pl.unparkAll();
+        co_await t.sleep(1ms);
+        CATCH_CHECK(running == 5);
+
+        co_return join;
+    };
+}
+
 CORRAL_TEST_CASE("semaphores") {
     CATCH_SECTION("smoke") {
         Semaphore sem(5);
