@@ -1866,6 +1866,31 @@ CORRAL_TEST_CASE("value") {
             });
 
     CATCH_CHECK(t.now() == 4ms);
+
+    Value<std::function<void()>> vf{};
+    co_await allOf(
+            [&]() -> Task<> {
+                co_await t.sleep(1ms);
+                vf = [] {};
+                co_await t.sleep(2ms);
+                vf = nullptr;
+            },
+            [&]() -> Task<> {
+                co_await until(!!vf);
+                CATCH_CHECK(t.now() == 5ms);
+
+                co_await until(vf.isTrue()); // alternate syntax
+                CATCH_CHECK(t.now() == 5ms);
+
+                CATCH_CHECK(vf);
+                CATCH_CHECK(vf.isTrue());
+
+                co_await until(!vf);
+                CATCH_CHECK(t.now() == 7ms);
+
+                CATCH_CHECK(!vf);
+                CATCH_CHECK(!vf.isTrue());
+            });
 }
 
 CORRAL_TEST_CASE("noop") {

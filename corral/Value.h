@@ -143,6 +143,36 @@ template <class T> class Value {
         return value_ <=> std::forward<U>(rhs);
     }
 
+    auto operator!()
+        requires(requires(const T t) { !t; })
+    {
+        return makeComparison([](const T& t) { return !t; });
+    }
+
+    bool operator!() const
+        requires(requires(const T t) { !t; })
+    {
+        return !value_;
+    }
+
+    /// An alias for `!!value`, for those who prefer more explicit naming.
+    auto isTrue()
+        requires(requires(const T t) { bool(t); })
+    {
+        return makeComparison([](const T& t) { return bool(t); });
+    }
+    bool isTrue() const
+        requires(requires(const T t) { bool(t); })
+    {
+        return bool(value_);
+    }
+
+    explicit operator bool() const
+        requires(requires(const T t) { bool(t); })
+    {
+        return bool(value_);
+    }
+
     //
     // Shorthands proxying arithmetic operations to the stored value.
     //
@@ -303,6 +333,10 @@ template <class T> template <class Fn> class Value<T>::Comparison {
 
     friend Awaiter until(Comparison&& self) {
         return Awaiter(self.cond_, std::move(self.fn_));
+    }
+
+    auto operator!() {
+        return cond_.makeComparison([fn = fn_](const T& v) { return !fn(v); });
     }
 
   private:
