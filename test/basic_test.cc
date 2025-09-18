@@ -27,14 +27,26 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <forward_list>
 #include <functional>
 #include <map>
 #include <optional>
 #include <ranges>
+#include <sstream>
 #include <vector>
 
-#include "../corral/corral.h"
 #include "config.h"
+
+// Windows headers #define infamous min(a,b) and max(a,b) macros,
+// which break `std::max()` and `std::numeric_limits<T>::max()`,
+// unless parenthesized (`(std::max)(a,b)`) or qualified
+// (`std::max<size_t>(a,b)`).
+//
+// #define these here to catch any possible uses in the code below.
+#define min(a, b) __corral_dont_use_min_max(a, b)
+#define max(a, b) __corral_dont_use_min_max(a, b)
+
+#include "../corral/corral.h"
 #include "helpers.h"
 
 using namespace corral;
@@ -2747,6 +2759,7 @@ CORRAL_TEST_CASE("unbounded-channel") {
 
     CATCH_SECTION("many") {
         for (int i = 0; i < 10'000; i++) {
+            CATCH_CHECK(channel.size() == i);
             co_await channel.send(i);
         }
 
@@ -2780,6 +2793,189 @@ CORRAL_TEST_CASE("unbounded-channel") {
         // More writes will fail
         sent = co_await channel.send(2);
         CATCH_CHECK(!sent);
+    }
+}
+
+CORRAL_TEST_CASE("channel-ranges") {
+    CATCH_SECTION("smoke") {
+        Channel<char> channel(16);
+        size_t wr = co_await channel.send(std::string_view("0123456789ab"));
+        CATCH_CHECK(wr == 12);
+        CATCH_CHECK(channel.size() == 12);
+        CATCH_CHECK(channel.space() == 4);
+
+        std::string_view sv("ABCDEFGH");
+        auto it = co_await channel.send(sv.begin(), sv.end());
+        CATCH_CHECK(it == sv.begin() + 4);
+        CATCH_CHECK(channel.size() == 16);
+        CATCH_CHECK(channel.space() == 0);
+
+        std::string buf(32, '\0');
+        auto o = co_await channel.receive(buf.begin(), 4);
+        CATCH_CHECK(o == buf.begin() + 4);
+        CATCH_CHECK(buf.substr(0, 4) == "0123");
+
+        wr = co_await channel.send(std::string_view("98765432"));
+        CATCH_CHECK(wr == 4);
+
+        size_t rd = co_await channel.receive(buf);
+        CATCH_CHECK(rd == 16);
+    }
+
+    CATCH_SECTION("iterator-categories") {
+        Channel<int> channel;
+
+        // send(forward_interator)
+        std::forward_list<int> list{1, 2, 3, 4, 5};
+        size_t wr = co_await channel.send(list);
+        CATCH_CHECK(wr == 5);
+        list.clear();
+
+        // send(input_iterator)
+        std::istringstream iss("6 7 8");
+        co_await channel.send(std::istream_iterator<int>(iss),
+                              std::istream_iterator<int>());
+
+        // receive(output_iterator)
+        std::vector<int> vec;
+        co_await channel.receive(std::back_inserter(vec));
+        CATCH_CHECK(vec == std::vector<int>{1, 2, 3, 4, 5, 6, 7, 8});
+    }
+
+    CATCH_SECTION("bulk-wakeup-read") {
+        Channel<int> channel;
+
+        std::vector<int> v;
+        v.resize(6);
+        CORRAL_WITH_NURSERY(n) {
+            n.start([&]() -> Task<> {
+                co_await channel.receive(v.begin(), 1);
+            });
+            n.start([&]() -> Task<> {
+                co_await channel.receive(v.begin() + 1, 2);
+            });
+            n.start([&]() -> Task<> {
+                co_await channel.receive(v.begin() + 3, 3);
+            });
+
+            co_await t.sleep(1ms);
+            co_await channel.send(std::array{1, 2, 3, 4, 5, 6});
+            co_return join;
+        };
+        CATCH_CHECK(v == std::vector<int>{1, 2, 3, 4, 5, 6});
+    }
+
+    CATCH_SECTION("bulk-wakeup-write") {
+        Channel<int> channel(6);
+        co_await channel.send(std::array{10, 11, 12, 13, 14, 15});
+
+        std::vector<int> v;
+        v.resize(6);
+        CORRAL_WITH_NURSERY(n) {
+            n.start([&]() -> Task<> { co_await channel.send(1); });
+            n.start([&]() -> Task<> {
+                co_await channel.send(std::array{2, 3});
+            });
+            n.start([&]() -> Task<> {
+                co_await channel.send(std::array{4, 5, 6});
+            });
+
+            co_await t.sleep(1ms);
+            co_await channel.receive(v.begin(), 6);
+            co_return join;
+        };
+
+        CATCH_CHECK(v == std::vector<int>{10, 11, 12, 13, 14, 15});
+        co_await channel.receive(v.begin(), 6);
+        CATCH_CHECK(v == std::vector<int>{1, 2, 3, 4, 5, 6});
+    }
+
+    CATCH_SECTION("race") {
+        Channel<int> channel;
+        co_await channel.send(1);
+
+        co_await allOf(
+                [&]() -> Task<> {
+                    auto [a, b] = co_await allOf(channel.receive(),
+                                                 channel.receive());
+                    CATCH_CHECK(t.now() == 2ms);
+
+                    if (*a == 1) {
+                        CATCH_CHECK(*b == 2);
+                    } else {
+                        CATCH_CHECK(*a == 2);
+                        CATCH_CHECK(*b == 1);
+                    }
+                },
+                [&]() -> Task<> {
+                    co_await t.sleep(2ms);
+                    co_await channel.send(2);
+                });
+    }
+
+    CATCH_SECTION("concurrent-read-oversubscribe") {
+        Channel<int> channel;
+        co_await channel.send(std::array{1, 2, 3, 4, 5, 6});
+
+        std::vector<int> a, b, c;
+        co_await allOf(channel.receive(std::back_inserter(a), 6),
+                       channel.receive(std::back_inserter(b), 6),
+                       channel.receive(std::back_inserter(c), 6));
+
+        CATCH_CHECK(a == std::vector<int>{1, 2, 3, 4});
+        CATCH_CHECK(b == std::vector<int>{5});
+        CATCH_CHECK(c == std::vector<int>{6});
+    }
+
+    CATCH_SECTION("imm-cancel") {
+        Channel<int> channel;
+        co_await channel.send(std::array{1, 2, 3, 4});
+
+        auto [_, r] = co_await anyOf(std::suspend_never{}, channel.receive());
+        CATCH_CHECK(!r);
+        CATCH_CHECK(channel.size() == 4);
+    }
+
+    CATCH_SECTION("pending-op") {
+        Channel<int> channel;
+        co_await channel.send(1);
+
+        CATCH_SECTION("create-await") {
+            auto awaitable = channel.receive();
+            auto awaiter = std::move(awaitable).operator co_await();
+            CATCH_CHECK(channel.empty());
+            CATCH_CHECK(channel.tryReceive() == std::nullopt);
+
+            auto v = co_await std::move(awaiter);
+            CATCH_CHECK(*v == 1);
+        }
+
+        CATCH_SECTION("create-destroy") {
+            {
+                auto awaitable = channel.receive();
+                auto awaiter = std::move(awaitable).operator co_await();
+                CATCH_CHECK(channel.empty());
+                CATCH_CHECK(channel.tryReceive() == std::nullopt);
+            }
+            CATCH_CHECK(channel.size() == 1);
+            auto v = co_await channel.receive();
+            CATCH_CHECK(v == 1);
+        }
+    }
+
+    CATCH_SECTION("zero-sized-read") {
+        Channel<int> channel;
+        int a;
+        std::optional<int> b;
+        CORRAL_WITH_NURSERY(n) {
+            n.start([&]() -> Task<> { co_await channel.receive(&a, 0); });
+            n.start([&]() -> Task<> { b = co_await channel.receive(); });
+
+            co_await t.sleep(1ms);
+            co_await channel.send(1);
+            co_return join;
+        };
+        CATCH_CHECK(b == 1);
     }
 }
 

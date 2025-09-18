@@ -26,10 +26,14 @@
 #pragma once
 #include <stddef.h>
 
+#include <iterator>
 #include <memory>
+#include <ranges>
 #include <span>
 #include <type_traits>
 #include <utility>
+
+#include "../config.h"
 
 namespace corral::detail {
 
@@ -123,6 +127,53 @@ class Queue {
         }
     }
 
+    template <std::forward_iterator It>
+        requires(std::constructible_from<T, std::iter_reference_t<It>>)
+    void append(It begin, It end) {
+        size_t sz = std::distance(begin, end);
+        if (size_ + sz > capacity_) {
+            grow(size_ + sz);
+        }
+
+        if (tail_ + sz <= buffer_ + capacity_) {
+            // Free space unfragmented
+            tail_ = moveRange(begin, end, tail_);
+        } else {
+            auto bound = begin;
+            std::advance(bound, std::distance(tail_, buffer_ + capacity_));
+            moveRange(begin, bound, tail_);
+            tail_ = moveRange(bound, end, buffer_);
+        }
+        size_ += sz;
+        if (tail_ == buffer_ + capacity_) {
+            tail_ = buffer_;
+        }
+    }
+
+    template <std::output_iterator<T> It>
+    std::pair<It, size_t /*elem count*/> pop_front_to(size_t n, It dst) {
+        CORRAL_ASSERT(n <= size_);
+        size_t n1 = std::min<size_t>(
+                n, static_cast<size_t>(buffer_ + capacity_ - head_));
+        dst = std::move(head_, head_ + n1, dst);
+        std::destroy(head_, head_ + n1);
+        head_ += n1;
+        if (head_ == buffer_ + capacity_) {
+            head_ = buffer_;
+        }
+        size_ -= n1;
+
+        n = std::min<size_t>(n - n1, static_cast<size_t>(tail_ - buffer_));
+        if (n) {
+            dst = std::move(buffer_, buffer_ + n, dst);
+            std::destroy(buffer_, buffer_ + n);
+            head_ = buffer_ + n;
+            size_ -= n;
+        }
+
+        return {dst, n + n1};
+    }
+
   private:
     std::span<T> first_range() {
         if (empty()) {
@@ -142,21 +193,25 @@ class Queue {
         }
     }
 
-    void grow() {
-        Queue q(std::max<size_t>(8, capacity_ * 2));
-        auto moveRange = [&](std::span<T> range) {
-            if constexpr (std::is_nothrow_move_constructible_v<T>) {
-                q.tail_ = std::uninitialized_move(range.begin(), range.end(),
-                                                  q.tail_);
-            } else {
-                q.tail_ = std::uninitialized_copy(range.begin(), range.end(),
-                                                  q.tail_);
-            }
-            q.size_ += range.size();
-        };
-        moveRange(first_range());
-        moveRange(second_range());
+    void grow(size_t newCapacity = 0) {
+        Queue q(std::max<size_t>(std::max<size_t>(newCapacity, 8),
+                                 capacity_ * 2));
+        auto dst = moveRange(first_range(), q.tail_);
+        q.tail_ = moveRange(second_range(), dst);
+        q.size_ = size_;
         *this = std::move(q);
+    }
+
+    static auto moveRange(auto it, auto ie, auto dst) {
+        if constexpr (std::is_nothrow_move_constructible_v<T>) {
+            return std::uninitialized_move(it, ie, dst);
+        } else {
+            return std::uninitialized_copy(it, ie, dst);
+        }
+    }
+
+    static auto moveRange(auto&& range, auto dst) {
+        return moveRange(range.begin(), range.end(), dst);
     }
 };
 

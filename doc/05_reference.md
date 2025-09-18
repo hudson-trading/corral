@@ -682,10 +682,9 @@ class Channel {
 
     bool closed() const noexcept;
 
-    // Reading
-
-    Awaitable<std::optional<T>> auto receive();
-    std::optional<T> tryReceive();
+    //
+    // READING
+    //
 
     size_t size() const noexcept;
     bool empty() const noexcept;
@@ -693,10 +692,32 @@ class Channel {
     class ReadHalf;
     ReadHalf& readHalf();
 
-    // Writing
+    // Blocking
 
-    template <class U> Awaitable<bool> auto send(U&&);
-    template <class U> bool trySend(U&&);
+    Awaitable<std::optional<T>> auto receive();
+
+    template <std::output_iterator<T> It>
+    Awaitable<It> auto
+    receive(It out, size_t n = std::numeric_limits<size_t>::max());
+
+    template <std::ranges::output_range<T> R>
+    Awaitable<size_t> auto receive(R&& dst);
+
+    // Non-blocking
+
+    std::optional<T> tryReceive();
+
+    template <std::output_iterator It>
+    It tryReceive(It out, size_t n = std::numeric_limits<size_t>::max());
+
+    template <std::ranges::output_range<T> R>
+    size_t tryReceive(R&& dst);
+
+
+    //
+    // WRITING
+    //
+
     void close();
 
     size_t space() const noexcept;
@@ -704,10 +725,39 @@ class Channel {
 
     class WriteHalf;
     WriteHalf& writeHalf();
+
+    // Blocking
+
+    template <class U> Awaitable<bool> auto send(U&&);
+
+    template <std::input_iterator It>
+    Awaitable<It> auto send(It begin, It end);
+
+    template <std::ranges::input_range R>
+    Awaitable<size_t> auto send(R&& range);
+
+    // Non-blocking
+
+    template <class U> bool trySend(U&&);
+
+    template <std::input_iterator It>
+    It trySend(It begin, It end);
+
+    template <std::ranges::input_range R>
+    size_t trySend(R&& range);
 };
 ```
 
 An ordered communication channel for sending objects of type T between tasks.
+
+Channel provides an option to enqueue (or dequeue) multiple elements in one
+awaiting operation, which may have performance benefit in certain scenarios.
+Note though that the channel can disseminate written elements arbitrarily
+among concurrent reads (or likewise, for bounded channels, channel space
+freed by a read among concurrent writes). When enqueuing multiple elements
+in a channel, make sure that each such element can be handled in isolation
+(without any context of previously received elements), or that there is only
+one reader and one writer for the channel.
 
 * `Channel<T>::Channel(size_t maxSize)`
   : Constructs a bounded channel, capable of holding up to `maxSize` objects
@@ -727,8 +777,20 @@ An ordered communication channel for sending objects of type T between tasks.
   the object has been accepted, which may not be immediate if a bounded channel's
   buffer is full.
 
+* `Awaitable<It> auto Channel<T>::send(It begin, It end)`
+  : Delivers multiple objects to the channel, moving them more efficiently
+  (using `memcpy()`) if appropriate. Suspends the caller if the (bounded) channel
+  is full, but may send less elements than desired if remaining channel capacity
+  is less than size of the range. Returns an iterator to the first unsent element
+  (or `end` if all elements were sent), or `begin` if the channel is closed.
+
+* `Awaitable<size_t> auto Channel<T>::send(std::ranges::input_range<R> auto&& range)`
+  : Same as above, but takes a range, and returns number of sent elements.
+
 * `bool Channel<T>::trySend(std::convertible_to<T> auto&&)`
-  : Non-blocking version of the above. Returns false if the channel
+* `It Channel<T>::trySend(It begin, It end)`
+* `size_t Channel<T>:trySend(std::ranges::input_range<R> auto&& range)`
+  : Non-blocking version of the above. May send zero elements if the channel
   is closed, or if no space is available in a bounded channel.
 
 * `void Channel<T>::close()`
@@ -742,13 +804,27 @@ An ordered communication channel for sending objects of type T between tasks.
   if no objects are immediately available. Returns `std::nullopt` if the channel
   is closed and all of its objects have been consumed.
 
+* `Awaitable<It> auto Channel<T>::receive(It dst, size_t n = std::numeric_limits<size_t>::max())`
+  : Retrieves multiple objects from the channel, storing them in an output range
+  beginning at `dst`, and returns an iterator to the end of the range.
+  If `n` is specified, retrieves up to _n_ elements.
+  Suspends the caller until at least one elements has been received, or until
+  the channel is closed (in which case returns `dst`).
+
+* `Awaitable<size_t> auto Channel<T>::receive(std::ranges::output_range<T> auto&& dst)`
+  : Same as above, but takes a range, and returns number of retrieved elements.
+
 * `std::optional<T> Channel<T>::tryReceive()`
-  : Non-blocking version of the above. May return `std::nullopt` if no objects
-  are currently available.
+* `It Channel<T>::tryReceive(It dst, size_t n = std::numeric_limits<size_t>::max())`
+* `size_t Channel<T>::receive(std::ranges::output_range<T> auto&& dst)`
+  : Non-blocking version of the above. May return zero elements
+  (`std::nullopt`, `dst`, or `0`) if no objects are currently available.
 
 * `size_t Channel<T>::size() const noexcept`
   : Returns the number of objects immediately available to read from this channel,
   i.e., the number of times in a row you can call `tryReceive()` successfully.
+  Note that reading awaitables in scope may claim elements for themselves,
+  so `size()` may return less elements than are physically present in the channel.
 
 * `bool Channel<T>::empty() const noexcept`
   : Returns true if there are no objects immediately available, i.e., whether
@@ -758,6 +834,10 @@ An ordered communication channel for sending objects of type T between tasks.
   : Returns the amount of free space in the channel buffer, i.e., the number of times
   in a row you can call `trySend()` successfully. Returns 0 for closed channels,
   and `std::numeric_limits<size_t>::max()` for unbounded channels.
+  Note that writing awaitables in scope may claim free space for themselves,
+  so `space()` may indicate less space than there is in the channel.
+  Also, due to the above, `size() + space()` would not necessarily sum up
+  to the original channel capacity.
 
 * `bool Channel<T>::full() const noexcept`
   : Returns true if there is no free space in the channel buffer (or the channel
