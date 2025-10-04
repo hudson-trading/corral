@@ -136,8 +136,6 @@ jobs:
           -DCORRAL_BOOST=/opt/include
           -DCORRAL_CATCH2=https://github.com/catchorg/catch2
           -DCORRAL_TEST_RUNNER=${{ matrix.test_runner }}
-          -DBUILD_TESTING=1
-          -DCORRAL_EXAMPLES=1
           ${{ matrix.cmake_flags }}
           ${{ github.workspace }}
 

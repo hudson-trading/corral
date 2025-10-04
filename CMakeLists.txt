@@ -49,7 +49,8 @@ target_sources(corral
 
 target_include_directories(corral INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
-if(BUILD_TESTING)
+option(SKIP_TESTS "Do not build corral unit tests.")
+if(NOT ${SKIP_TESTS})
 
   set(CORRAL_TEST_RUNNER
       ""
@@ -64,7 +65,7 @@ if(BUILD_TESTING)
   if("${CORRAL_CATCH2}" MATCHES ".*://.*")
     message(
       STATUS
-        "Trying to bundle Catch2 ver 2.xx.x (maybe via git cloning whole Boost)."
+        "Trying to bundle Catch2 ver 2.xx.x"
     )
     include(FetchContent)
     FetchContent_Declare(
@@ -168,10 +169,7 @@ install(
 #
 # Examples
 #
-set(CORRAL_EXAMPLES
-    OFF
-    CACHE BOOL "Build examples"
-)
-if(CORRAL_EXAMPLES)
+option(SKIP_EXAMPLES "Do not build corral examples")
+if (NOT ${SKIP_EXAMPLES})
   add_subdirectory(examples)
 endif()
