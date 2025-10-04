@@ -81,9 +81,22 @@ if(BUILD_TESTING)
 
   enable_testing()
 
-  add_executable(corral_basic_test test/basic_test.cc test/helpers.h)
+  add_executable(
+    corral_basic_test
+    test/basic_test.cc
+    test/adapter_test.cc
+    test/callback_test.cc
+    test/channel_test.cc
+    test/combiner_test.cc
+    test/error_policy_test.cc
+    test/nursery_test.cc
+    test/stack_trace_test.cc
+    test/sync_primitive_test.cc
+    test/config.h
+    test/helpers.h
+    test/TestEventLoop.h
+  )
   target_link_libraries(corral_basic_test PRIVATE corral Catch2::Catch2)
-  target_compile_definitions(corral_basic_test PRIVATE CATCH_CONFIG_MAIN)
   add_test(NAME corral_basic_test COMMAND ${CORRAL_TEST_RUNNER}
                                           corral_basic_test
   )
@@ -116,9 +129,8 @@ if(BUILD_TESTING)
       set(CORRAL_BOOST_ASIO_LIB_NAME "Boost::boost")
     endif()
 
-    add_executable(corral_asio_test test/asio_test.cc test/helpers.h)
+    add_executable(corral_asio_test test/asio_test.cc test/config.h test/config.h)
     target_link_libraries(corral_asio_test PRIVATE corral Catch2::Catch2)
-    target_compile_definitions(corral_asio_test PRIVATE CATCH_CONFIG_MAIN)
 
     if("${CORRAL_TEST_RUNNER}" STREQUAL "")
       message(STATUS "Trying to use installed OpenSSL.")

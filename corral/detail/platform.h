@@ -67,10 +67,10 @@ struct exception_ptr {
     explicit constexpr operator bool() const noexcept { return false; }
 };
 [[noreturn]] void unreachable();
-exception_ptr current_exception() noexcept {
+inline exception_ptr current_exception() noexcept {
     unreachable();
 }
-[[noreturn]] void rethrow_exception(exception_ptr) {
+[[noreturn]] inline void rethrow_exception(exception_ptr) {
     unreachable();
 }
 #endif

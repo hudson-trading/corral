@@ -26,6 +26,7 @@
 #pragma once
 
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <ranges>
 
