@@ -87,10 +87,12 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
         return false;
     }
 
-    bool await_must_resume() const noexcept { return completed_ || exception_; }
+    bool await_must_resume() const noexcept {
+        return completed_ || (exception_ && !exceptionHandled_);
+    }
 
     void await_resume() {
-        if (exception_) {
+        if (exception_ && !exceptionHandled_) {
             rethrow_exception(exception_);
         }
     }
@@ -141,6 +143,7 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
             std::terminate(); // multiple exceptions in flight
         } else {
             exception_ = current_exception();
+            exceptionHandled_ = false;
         }
     }
 
@@ -189,6 +192,7 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
                 try {
                     std::rethrow_exception(exception_);
                 } catch (Exception ex) {
+                    exceptionHandled_ = true;
                     return invoke(std::get<I>(catchLambdas_),
                                   std::forward<Exception>(ex));
                 } catch (...) { return dispatchException<I + 1>(); }
@@ -215,6 +219,7 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
     Stage stage_ = Stage::TRY;
     bool earlyCancel_ = false;
     bool completed_ = false;
+    bool exceptionHandled_ = false;
     PromisePtr<void> task_;
 
     union {

@@ -506,6 +506,114 @@ CORRAL_TEST_CASE("try-sync-exception") {
         };
     } catch (std::exception&) { stage.require(3); }
 }
+
+CORRAL_TEST_CASE("try-exc-catch-cancel") {
+    // If the coroutine is cancelled in the catch clause,
+    // the exception should not be rethrown out of the whole try-catch block.
+    StageChecker stage;
+    CORRAL_WITH_NURSERY(n) {
+        n.start([&]() -> Task<> {
+            co_await t.sleep(3ms);
+            stage.require(2);
+            n.cancel();
+        });
+
+        CATCH_SECTION("without-finally") {
+            auto g4 = stage.requireOnExit(4);
+            CORRAL_TRY {
+                co_await t.sleep(1ms);
+                stage.require(0);
+                throw std::runtime_error("test");
+            }
+            CORRAL_CATCH(const std::exception& e) {
+                stage.require(1);
+                auto g3 = stage.requireOnExit(3);
+
+                co_await t.sleep(10ms); // cancellation happens here
+                CORRAL_ASSERT_UNREACHABLE();
+            };
+        }
+
+        CATCH_SECTION("with-finally") {
+            auto g6 = stage.requireOnExit(6);
+            CORRAL_TRY {
+                co_await t.sleep(1ms);
+                stage.require(0);
+                throw std::runtime_error("test");
+            }
+            CORRAL_CATCH(const std::exception& e) {
+                stage.require(1);
+                auto g3 = stage.requireOnExit(3);
+
+                co_await t.sleep(10ms); // cancellation happens here
+                CORRAL_ASSERT_UNREACHABLE();
+            }
+            CORRAL_FINALLY {
+                stage.require(4);
+                co_await t.sleep(3ms);
+                stage.require(5);
+            };
+        }
+
+        CORRAL_ASSERT_UNREACHABLE();
+    };
+}
+
+CORRAL_TEST_CASE("try-exc-finally-cancel") {
+    // If the coroutine is cancelled in the finally-clause with an unhandled
+    // exception, the finally-clause should run to completion,
+    // and exception should be rethrown out of the try-block.
+    StageChecker stage;
+    CORRAL_WITH_NURSERY(n) {
+        n.start([&]() -> Task<> {
+            co_await t.sleep(3ms);
+            stage.require(2);
+            n.cancel();
+        });
+
+        try {
+            CATCH_SECTION("without-catch") {
+                auto g4 = stage.requireOnExit(4);
+                CORRAL_TRY {
+                    co_await t.sleep(1ms);
+                    stage.require(0);
+                    throw std::runtime_error("test");
+                }
+                CORRAL_FINALLY {
+                    stage.require(1);
+                    co_await t.sleep(10ms); // cancellation happens here
+                    stage.require(3);
+                };
+                CATCH_CHECK(!"should not reach here");
+            }
+
+            CATCH_SECTION("with-throwing-catch") {
+                auto g4 = stage.requireOnExit(4);
+                CORRAL_TRY {
+                    co_await t.sleep(1ms);
+                    stage.require(0);
+                    throw std::runtime_error("test2");
+                }
+                CORRAL_CATCH(const std::exception& e) {
+                    co_await t.sleep(1ms);
+                    throw std::runtime_error("test");
+                }
+                CORRAL_FINALLY {
+                    stage.require(1);
+                    co_await t.sleep(10ms); // cancellation happens here
+                    stage.require(3);
+                };
+                CATCH_CHECK(!"should not reach here");
+            }
+
+        } catch (const std::exception& e) {
+            stage.require(5);
+            CATCH_CHECK(std::string(e.what()) == "test");
+        }
+
+        co_return cancel;
+    };
+}
 #endif
 
 CORRAL_TEST_CASE("try-cancel") {
