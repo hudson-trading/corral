@@ -23,6 +23,11 @@
 //
 // SPDX-License-Identifier: MIT
 
+#ifdef _MSC_VER
+#define _USE_MATH_DEFINES 1
+#endif
+
+#include <cmath>
 #include <functional>
 #include <string>
 
@@ -57,12 +62,11 @@ CORRAL_TEST_CASE("noop") {
     };
 }
 
-CORRAL_TEST_CASE("just") {
-    auto mkAsync = [](int n) { return [n]() -> Task<int> { return just(n); }; };
-    auto x = co_await mkAsync(42)();
+CORRAL_TEST_CASE("just-imm") {
+    auto x = co_await just(42);
     CATCH_CHECK(x == 42);
 
-    auto [y, z] = co_await allOf(mkAsync(1)(), mkAsync(2)());
+    auto [y, z] = co_await allOf(just(1), just(2));
     CATCH_CHECK(y == 1);
     CATCH_CHECK(z == 2);
 
@@ -78,6 +82,55 @@ CORRAL_TEST_CASE("just") {
     auto& rq = co_await just<std::unique_ptr<int>&>(q);
     CATCH_CHECK(*q == 42);
     CATCH_CHECK(*rq == 42);
+}
+
+
+template <class T>
+constexpr const bool FitsInline = corral::detail::ValueOrPromise<T>::FitsInline;
+
+template <class T> Task<T> mkAsync(T v) {
+    return just<T>(std::forward<T>(v));
+}
+
+CORRAL_TEST_CASE("just-async") {
+    // Same as `just-imm`, but all just() are casted to Task<T>.
+    static_assert(FitsInline<int>);
+    static_assert(FitsInline<int*>);
+    static_assert(FitsInline<uintptr_t>);
+    static_assert(FitsInline<std::monostate>);
+    static_assert(FitsInline<void>);
+
+    static_assert(!FitsInline<std::vector<int>>);
+    static_assert(!FitsInline<std::unique_ptr<int>>);
+    static_assert(FitsInline<const std::vector<int>&>);
+
+    auto x = co_await mkAsync(42);
+    CATCH_CHECK(x == 42);
+
+    auto [y, z] = co_await allOf(mkAsync(1), mkAsync(2));
+    CATCH_CHECK(y == 1);
+    CATCH_CHECK(z == 2);
+
+    int i;
+    int& ri = co_await mkAsync<int&>(i);
+    CATCH_CHECK(&ri == &i);
+    int&& rri = co_await mkAsync<int&&>(std::move(i));
+    CATCH_CHECK(&rri == &i);
+
+    auto p = std::make_unique<int>(42);
+    auto q = co_await mkAsync(std::move(p));
+    CATCH_CHECK(p == nullptr);
+    CATCH_CHECK(*q == 42);
+
+    auto& rq = co_await mkAsync<std::unique_ptr<int>&>(q);
+    CATCH_CHECK(*q == 42);
+    CATCH_CHECK(*rq == 42);
+
+    float f = co_await Task<float>(justApx<float>(M_PI));
+    CATCH_CHECK(fabs(f - float(M_PI)) < 8e-7);
+
+    double df = co_await Task<double>(justApx<double>(M_PI));
+    CATCH_CHECK(fabs(df - M_PI) < 1e-15);
 }
 
 //

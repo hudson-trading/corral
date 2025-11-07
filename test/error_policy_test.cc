@@ -220,6 +220,46 @@ CORRAL_TEST_CASE("errp-nursery-fail-body") {
     CATCH_CHECK(ret == MyError{EPROTO});
 }
 
+CORRAL_TEST_CASE("errp-nursery-imm-fail-sibling") {
+    // `nursery-imm-fail-sibling` test rewritten for custom policies
+    StageChecker stage;
+    MyResult<> r = WITH_MY_NURSERY(n) {
+        n.start([&]() -> Task<MyResult<>> {
+            stage.require(1);
+            auto _ = stage.requireOnExit(2);
+            co_await SuspendForever{};
+            co_return OK;
+        });
+
+        n.start([&]() -> Task<MyResult<>> { return just(MyError{EPROTO}); });
+
+        stage.require(0);
+        return just(join);
+    };
+
+    stage.require(3);
+    CATCH_CHECK(r == MyError{EPROTO});
+}
+
+CORRAL_TEST_CASE("errp-nursery-imm-fail-nursery-block") {
+    // `nursery-imm-fail-nursery-block` test rewritten for custom policies
+    StageChecker stage;
+    MyResult<> r = WITH_MY_NURSERY(n) {
+        n.start([&]() -> Task<MyResult<>> {
+            stage.require(1);
+            auto _ = stage.requireOnExit(2);
+            co_await SuspendForever{};
+            co_return OK;
+        });
+
+        stage.require(0);
+        return just(MyError{EPROTO});
+    };
+
+    stage.require(3);
+    CATCH_CHECK(r == MyError{EPROTO});
+}
+
 
 CORRAL_TEST_CASE("errp-anyof-success") {
     MyResult<std::tuple<std::optional<int>, std::optional<int>>> r =

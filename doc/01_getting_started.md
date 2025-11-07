@@ -540,6 +540,68 @@ might block indefinitely, it should impose an internal timeout to avoid
 deadlocking the program.
 
 
+## Immediately-ready coroutines
+
+Sometimes it may be necessary to write a function which is declared as
+asynchronous, but does not do any awaiting (or even is empty) --
+most frequently, when deriving from a base class which defines a virtual
+asynchronous function:
+
+```cpp
+class DataWriter {
+    // ...
+    virtual Task<void> flush() = 0;
+};
+class MyDataWriter: public DataWrtier {
+    Task<void> flush() override { co_return; }
+};
+```
+
+This works as intended, but calling such a function still involves
+heap-allocating a coroutine frame, and thus has some inherent performance
+overhead. To address this, corral defines two helper functions, `noop()`
+and `just(T)`, which construct `Task<T>` not backed by any coroutine,
+and therefore can avoid a heap allocation in many cases
+(a heap allocation will still occur if `T` is not trivially copyable,
+is larger than a pointer, or has a value representation that doesn't
+include any zero bits on either the low- or high-order end).
+These can be used like this:
+
+```cpp
+    Task<void> flush() override { return corral::noop(); }
+    // or, if a returned value is expected;
+    Task<int /*errno*/> flush() override { return corral::just(0); }
+```
+
+This may also be used if a function expressed as an asyncronous function
+may or may not complete immediately. One example is combining a potentially
+costly operation with a cache of its results:
+
+```cpp
+std::unordered_map<std::filesystem::path, struct stat> statCache;
+
+Task<void> statImpl(const std::filesystem::path& path, struct stat& st) {
+    // Utilizie a io_uring or a thread pool to avoid blocking
+    // the thread for too long. Also fill in statCache.
+}
+
+Task<void> stat(const std::filesystem::path& path, struct stat& st) {
+    if (auto it = statCache.find(path); it != statCache.end()) {
+        st = it->second;
+        return corral::noop();
+    } else {
+        return statImpl(path, st); // delegate to a real coroutine
+    }
+}
+```
+
+In this case, on a cache hit, calling `stat()` on a cache hit would
+not require any heap allocation; meanwhile, utilizing the cache does not
+require any cooperation from the calling function (which can still
+have a simple `co_await stat(myfile, stbuf)`) and thus can be kept
+an implementation detail.
+
+
 ## Multithreading
 
 As mentioned in README, corral focuses on single-threaded applications,

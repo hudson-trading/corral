@@ -84,9 +84,9 @@ class NurseryBase : private Noncopyable {
     Handle addPromise(detail::Promise<Ret>* p, TaskParent<Ret>* parent);
 
     template <class Ret>
-    Handle addTask(Task<Ret> task, TaskParent<Ret>* parent) {
-        return addPromise(task.release(), parent);
-    }
+    Handle addTask(Task<Ret> task, TaskParent<Ret>* parent);
+
+    Handle continuation(BasePromise*) noexcept;
 
   protected /*fields*/:
     static constexpr const size_t Cancelling = 1;
@@ -223,13 +223,17 @@ class BasicNursery
 
   protected:
     void doStart(detail::Promise<TaskReturnType>* p) {
-        this->addPromise(p, this).resume();
+        if (p) {
+            this->addPromise(p, this).resume();
+        }
     }
 
     TaskReturnType wrapError();
 
     /// TaskParent implementation
-    Handle continuation(detail::BasePromise* promise) noexcept override;
+    Handle continuation(detail::BasePromise* promise) noexcept override {
+        return NurseryBase::continuation(promise);
+    }
     void storeError(typename Policy::ErrorType e) noexcept;
     void storeValue(detail::InhabitedType<TaskReturnType> value) override;
     void storeException() override;
@@ -498,6 +502,8 @@ class NurseryStartAwaiter
             std::exchange(nursery_, nullptr)->doStart(promise.release());
             return h;
         } else {
+            CORRAL_ASSERT(promise && "Nursery task (synchronously) completed "
+                                     "without signalling readiness");
             ++nursery_->pendingTaskCount_;
             handle_ = h;
             promise->setExecutor(executor_.ptr());
@@ -691,6 +697,54 @@ inline Handle NurseryBase::addPromise(detail::Promise<Ret>* promise,
     return promise->start(parent, parent_);
 }
 
+template <class Ret>
+inline Handle NurseryBase::addTask(Task<Ret> task, TaskParent<Ret>* parent) {
+    if (task.ready()) {
+        parent->storeValue(std::move(task).takeValue());
+        return continuation(nullptr);
+    } else {
+        return addPromise(task.release(), parent);
+    }
+}
+
+inline Handle NurseryBase::continuation(BasePromise* promise) noexcept {
+    Executor* executor = executor_.ptr();
+    Handle ret = noopHandle();
+
+    if (promise) {
+        CORRAL_TRACE("pr %p done in nursery %p (%zu tasks remaining)", promise,
+                     this, taskCount_ - 1);
+        tasks_.erase(*promise);
+        --taskCount_;
+    }
+
+    // NB: in an UnsafeNursery, parent_ is the task that called join(), or
+    // nullptr if no one has yet
+    if (tasks_.empty() && pendingTaskCount_ == 0 && parent_ != nullptr) {
+        ret = std::exchange(parent_, nullptr);
+        executor_.setPtr(nullptr); // nursery is now closed
+    }
+
+    // Defer promise destruction to the executor, as this may call
+    // scope guards, essentially interrupting the coroutine which called
+    // Nursery::cancel().
+    if (promise) {
+        executor->runSoon(
+                +[](detail::BasePromise* p) noexcept { p->destroy(); },
+                promise);
+    }
+
+    // To be extra safe, defer the resume() call to the executor as well,
+    // so we can be sure we don't resume the parent before destroying the frame
+    // of the last child.
+    if (ret != noopHandle()) {
+        executor->runSoon(
+                +[](void* arg) noexcept { Handle::from_address(arg).resume(); },
+                ret.address());
+    }
+    return std::noop_coroutine();
+}
+
 inline void NurseryBase::adopt(detail::BasePromise* promise) {
     CORRAL_ASSERT(executor_.ptr() && "Nursery is closed to new arrivals");
     CORRAL_TRACE("pr %p handed to nursery %p (%zu tasks total)", promise, this,
@@ -816,98 +870,117 @@ template <class Policy>
 template <class Callable, class... Args>
 detail::Promise<typename BasicNursery<Policy>::TaskReturnType>* //
 BasicNursery<Policy>::makePromise(Callable callable, Args... args) {
-    using Ret = Task<TaskReturnType>;
-    Ret ret;
-    if constexpr ((std::is_reference_v<Callable> &&
-                   std::is_invocable_r_v<Ret, Callable>) ||
-                  std::is_convertible_v<Callable, Ret (*)()>) {
-        // The awaitable is an async lambda (lambda that produces a Task<>)
-        // and it either was passed by lvalue reference or it is stateless,
-        // and no arguments were supplied.
-        // In this case, we don't have to worry about the lifetime of its
-        // captures, and can thus save an allocation here.
-        ret = callable();
-    } else {
-        using PassedReturnType = detail::AwaitableReturnType<
-                std::invoke_result_t<Callable, Args...>>;
-        // The lambda has captures, or we're working with a different
-        // awaitable type, so wrap it into another async function.
-        // The contents of the awaitable object (such as the lambda
-        // captures) will be kept alive as an argument of the new
-        // async function.
-
-        if constexpr (std::is_member_pointer_v<Callable>) {
-            // gcc-15 ICEs on `co_await (obj->*fun)(std::move(args)...)`
-            // (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=121094),
-            // so we have to split this in two full expressions to work around
-            // the ICE. This, however, may bring the issue of lifetime of any
-            // constructed temporaries (like calling a function taking a `const
-            // std::string&` with a const char*), so use some dirty TMP
-            // to manually convert arguments to those of necessary types,
-            // so we can be sure that if a function takes a reference,
-            // no temporary will be constructed during its invocation.
-
-            auto tup = std::forward_as_tuple<Args...>(std::move(args)...);
-            using Sig = detail::CallableSignature<Callable>;
-
-            auto body = [](Callable c, auto obj, auto... a) -> Ret {
-                if constexpr (std::is_same_v<PassedReturnType, detail::Void> ||
-                              std::is_same_v<TaskReturnType, void>) {
-                    // Either we are given a void-returning awaitable, or we are
-                    // a void-returning task ourselves here; in either case
-                    // we cannot `co_return co_await ...` here.
-
-                    // Either exceptions are used to indicate failure
-                    // (in which case they will auto-propagate)...
-                    decltype(auto) awaitable =
-                            std::invoke(c, std::move(obj), std::move(a)...);
-                    co_await std::forward<decltype(awaitable)>(awaitable);
-
-                    // ...or the task is infallible, so return an indication
-                    // of success in the used policy.
-                    if constexpr (!std::is_same_v<TaskReturnType, void>) {
-                        co_return Policy::wrapValue();
-                    }
-
-                } else {
-                    // The awaitable indicates its success or failure through
-                    // returning a value, so simply pass it further up.
-                    decltype(auto) awaitable =
-                            std::invoke(c, std::move(obj), std::move(a)...);
-                    co_return co_await std::forward<decltype(awaitable)>(
-                            awaitable);
-                }
-            };
-
-            ret = [&]<size_t... I>(std::index_sequence<I...>) {
-                return body(
-                        std::move(callable), std::move(std::get<0>(tup)),
-                        ArgConverter::convert<typename Sig::template Arg<I>>(
-                                std::move(std::get<I + 1>(tup)))...);
-            }(std::make_index_sequence<sizeof...(Args) - 1>{});
-
+#if __cpp_exceptions
+    try {
+#endif
+        using Ret = Task<TaskReturnType>;
+        Ret ret;
+        if constexpr ((std::is_reference_v<Callable> &&
+                       std::is_invocable_r_v<Ret, Callable>) ||
+                      std::is_convertible_v<Callable, Ret (*)()>) {
+            // The awaitable is an async lambda (lambda that produces a Task<>)
+            // and it either was passed by lvalue reference or it is stateless,
+            // and no arguments were supplied.
+            // In this case, we don't have to worry about the lifetime of its
+            // captures, and can thus save an allocation here.
+            ret = callable();
         } else {
-            // Note: we don't have to do TakenArg sorcery here,
-            // so make sure invocation of `c` and co_await'ing the result
-            // are in the same full expression, so any created temporaries
-            // will be alive while the coroutine runs.
+            using PassedReturnType = detail::AwaitableReturnType<
+                    std::invoke_result_t<Callable, Args...>>;
+            // The lambda has captures, or we're working with a different
+            // awaitable type, so wrap it into another async function.
+            // The contents of the awaitable object (such as the lambda
+            // captures) will be kept alive as an argument of the new
+            // async function.
 
-            ret = [](Callable c, Args... a) -> Ret {
-                // See comments above for description of alternatives here
-                if constexpr (std::is_same_v<PassedReturnType, detail::Void> ||
-                              std::is_same_v<TaskReturnType, void>) {
-                    co_await (std::move(c))(std::move(a)...);
-                    if constexpr (!std::is_same_v<TaskReturnType, void>) {
-                        co_return Policy::wrapValue();
+            if constexpr (std::is_member_pointer_v<Callable>) {
+                // gcc-15 ICEs on `co_await (obj->*fun)(std::move(args)...)`
+                // (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=121094),
+                // so we have to split this in two full expressions to work
+                // around the ICE. This, however, may bring the issue of
+                // lifetime of any constructed temporaries (like calling a
+                // function taking a `const std::string&` with a const char*),
+                // so use some dirty TMP to manually convert arguments to those
+                // of necessary types, so we can be sure that if a function
+                // takes a reference, no temporary will be constructed during
+                // its invocation.
+
+                auto tup = std::forward_as_tuple<Args...>(std::move(args)...);
+                using Sig = detail::CallableSignature<Callable>;
+
+                auto body = [](Callable c, auto obj, auto... a) -> Ret {
+                    if constexpr (std::is_same_v<PassedReturnType,
+                                                 detail::Void> ||
+                                  std::is_same_v<TaskReturnType, void>) {
+                        // Either we are given a void-returning awaitable, or we
+                        // are a void-returning task ourselves here; in either
+                        // case we cannot `co_return co_await ...` here.
+
+                        // Either exceptions are used to indicate failure
+                        // (in which case they will auto-propagate)...
+                        decltype(auto) awaitable =
+                                std::invoke(c, std::move(obj), std::move(a)...);
+                        co_await std::forward<decltype(awaitable)>(awaitable);
+
+                        // ...or the task is infallible, so return an indication
+                        // of success in the used policy.
+                        if constexpr (!std::is_same_v<TaskReturnType, void>) {
+                            co_return Policy::wrapValue();
+                        }
+
+                    } else {
+                        // The awaitable indicates its success or failure
+                        // through returning a value, so simply pass it further
+                        // up.
+                        decltype(auto) awaitable =
+                                std::invoke(c, std::move(obj), std::move(a)...);
+                        co_return co_await std::forward<decltype(awaitable)>(
+                                awaitable);
                     }
-                } else {
-                    co_return co_await (std::move(c))(std::move(a)...);
-                }
-            }(std::move(callable), std::move(args)...);
-        }
-    }
+                };
 
-    return ret.release();
+                ret = [&]<size_t... I>(std::index_sequence<I...>) {
+                    return body(std::move(callable),
+                                std::move(std::get<0>(tup)),
+                                ArgConverter::convert<
+                                        typename Sig::template Arg<I>>(
+                                        std::move(std::get<I + 1>(tup)))...);
+                }(std::make_index_sequence<sizeof...(Args) - 1>{});
+
+            } else {
+                // Note: we don't have to do TakenArg sorcery here,
+                // so make sure invocation of `c` and co_await'ing the result
+                // are in the same full expression, so any created temporaries
+                // will be alive while the coroutine runs.
+
+                ret = [](Callable c, Args... a) -> Ret {
+                    // See comments above for description of alternatives here
+                    if constexpr (std::is_same_v<PassedReturnType,
+                                                 detail::Void> ||
+                                  std::is_same_v<TaskReturnType, void>) {
+                        co_await (std::move(c))(std::move(a)...);
+                        if constexpr (!std::is_same_v<TaskReturnType, void>) {
+                            co_return Policy::wrapValue();
+                        }
+                    } else {
+                        co_return co_await (std::move(c))(std::move(a)...);
+                    }
+                }(std::move(callable), std::move(args)...);
+            }
+        }
+
+        if (ret.ready()) { // The awaitable completed synchronously
+            storeValue(std::move(ret).takeValue());
+            return nullptr;
+        } else {
+            return ret.release();
+        }
+#if __cpp_exceptions
+    } catch (...) {
+        storeException();
+        return nullptr;
+    }
+#endif
 }
 
 template <class Policy>
@@ -979,41 +1052,6 @@ void BasicNursery<Policy>::storeValue(
 template <class Policy> void BasicNursery<Policy>::storeException() {
     storeError(detail::errorFromCurrentException<Policy>());
 }
-
-template <class Policy>
-inline Handle BasicNursery<Policy>::continuation(
-        detail::BasePromise* promise) noexcept {
-    CORRAL_TRACE("pr %p done in nursery %p (%zu tasks remaining)", promise,
-                 this, taskCount_ - 1);
-    tasks_.erase(*promise);
-    --taskCount_;
-
-    Executor* executor = executor_.ptr();
-    Handle ret = noopHandle();
-    // NB: in an UnsafeNursery, parent_ is the task that called join(), or
-    // nullptr if no one has yet
-    if (tasks_.empty() && pendingTaskCount_ == 0 && parent_ != nullptr) {
-        ret = std::exchange(parent_, nullptr);
-        executor_.setPtr(nullptr); // nursery is now closed
-    }
-
-    // Defer promise destruction to the executor, as this may call
-    // scope guards, essentially interrupting the coroutine which called
-    // Nursery::cancel().
-    executor->runSoon(
-            +[](detail::BasePromise* p) noexcept { p->destroy(); }, promise);
-
-    // To be extra safe, defer the resume() call to the executor as well,
-    // so we can be sure we don't resume the parent before destroying the frame
-    // of the last child.
-    if (ret != noopHandle()) {
-        executor->runSoon(
-                +[](void* arg) noexcept { Handle::from_address(arg).resume(); },
-                ret.address());
-    }
-    return std::noop_coroutine();
-}
-
 
 template <class Policy>
 void BasicNursery<Policy>::introspect(detail::TaskTreeCollector& c,
@@ -1121,10 +1159,21 @@ class BasicNursery<Policy>::Scope
 
     Handle await_suspend(Handle h) {
         nursery_.parent_ = h;
-        Task<detail::NurseryBodyRetval<Policy>> body = callable_(nursery_);
-        CORRAL_TRACE("    ... nursery %p starting with task %p", &nursery_,
-                     body.promise_.get());
-        return nursery_.addTask(std::move(body), this);
+#if __cpp_exceptions
+        try {
+#endif
+            Task<detail::NurseryBodyRetval<Policy>> body = callable_(nursery_);
+            CORRAL_TRACE("    ... nursery %p starting with task %p", &nursery_,
+                         body.ready() ? nullptr : body.storage_.promise());
+            return nursery_.addTask(std::move(body), this);
+#if __cpp_exceptions
+        } catch (...) {
+            CORRAL_TRACE("    ... nursery %p with block ended by exception",
+                         &nursery_);
+            nursery_.storeException();
+            return nursery_.continuation(nullptr);
+        }
+#endif
     }
 
     void await_introspect(detail::TaskTreeCollector& c) const noexcept {

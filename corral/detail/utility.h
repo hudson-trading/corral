@@ -431,7 +431,9 @@ template <class Callable> class AwaitableLambda {
     bool await_ready() const noexcept { return false; }
 
     void await_set_executor(Executor* ex) noexcept {
-        awaiter().await_set_executor(ex);
+        if (!awaiter().await_ready()) {
+            awaiter_.await_set_executor(ex);
+        }
     }
 
     Handle await_suspend(Handle h) {

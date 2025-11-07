@@ -170,6 +170,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
             // executed by executor (for ready coroutines). This is a no-op
             // if cancel() was already called.
             cancelState_ = CancelState::Requested;
+
         } else {
             // Coroutine currently suspended, so intercept the flow at
             // its resume point, and forward cancellation request to the
@@ -184,22 +185,9 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     /// Destroys the promise and any locals within the coroutine frame.
     /// Only safe to call on not-yet-started tasks or those
     /// already completed (i.e., whose parent has resumed).
-    void destroy() {
-        if (hasCoroutine()) {
-            realHandle().destroy();
-        } else {
-            // Call the `TaskFrame::destroyFn` filled in by makeStub().
-            // This is the only place where that's actually a function
-            // pointer; normally we use it as a parent-task link.
-            proxyHandle().destroy();
-        }
-    }
+    void destroy() { realHandle().destroy(); }
 
     void await_introspect(TaskTreeCollector& c) const noexcept {
-        if (!hasCoroutine()) {
-            c.node("<noop>", this);
-            return;
-        }
         c.taskPC(pc, const_cast<BasePromise*>(this)->realHandle());
         if (state_ == State::Ready) {
             c.footnote("<SCHEDULED>");
@@ -209,20 +197,6 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
             CORRAL_ASSERT(hasAwaiter());
             awaiter_.introspect(c);
         }
-    }
-
-    bool checkImmediateResult(BaseTaskParent* parent) noexcept {
-        if (!hasCoroutine()) {
-            // If we have a value to provide immediately, then provide
-            // it without a trip through the executor
-            parent_ = parent;
-            // Invoke callback stashed by makeStub()
-            CoroutineFrame::resumeFn(this);
-            // Make sure it's only called once
-            CoroutineFrame::resumeFn = +[](CoroutineFrame*) {};
-            return true;
-        }
-        return false;
     }
 
   protected:
@@ -246,40 +220,13 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     /// notified (through parent->continuation().resume()) upon coroutine
     /// completion.
     Handle start(BaseTaskParent* parent, Handle caller) {
-        if (checkImmediateResult(parent)) {
-            return parent->continuation(this);
-        }
-        reparent(parent, caller);
         CORRAL_TRACE("pr %p started", this);
         onResume<&BasePromise::doResume>();
+        reparent(parent, caller);
         return proxyHandle();
     }
     // NOLINTNEXTLINE(clang-analyzer-core.uninitialized.UndefReturn)
     BaseTaskParent* parent() const noexcept { return parent_; }
-
-    /// Cause this promise to not resume a coroutine when it is started.
-    /// Instead, it will invoke the given callback and then resume its parent.
-    /// This can be used to create promises that are not associated with a
-    /// coroutine; see just() and noop(). Must be called before start().
-    template <class Derived, void (Derived::*onStart)()>
-    void makeStub(bool deleteThisOnDestroy) {
-        CORRAL_ASSERT(state_ == State::Ready && parent_ == nullptr);
-        state_ = State::Stub;
-        pc = 0;
-
-        // Since stub promises never use their inline CoroutineFrame,
-        // we can reuse them to store callbacks for start and destroy
-        CoroutineFrame::resumeFn = +[](CoroutineFrame* self) {
-            (static_cast<Derived*>(self)->*onStart)();
-        };
-        if (deleteThisOnDestroy) {
-            CoroutineFrame::destroyFn = +[](CoroutineFrame* self) {
-                delete static_cast<Derived*>(self);
-            };
-        } else {
-            CoroutineFrame::destroyFn = +[](CoroutineFrame* self) {};
-        }
-    }
 
   private /*methods*/:
     /// Returns a handle which, when resume()d, will immediately execute
@@ -300,8 +247,7 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     /// is passed to awaitees.
     Handle proxyHandle() noexcept { return CoroutineFrame::toHandle(); }
 
-    bool hasAwaiter() const noexcept { return state_ > State::Stub; }
-    bool hasCoroutine() const noexcept { return state_ != State::Stub; }
+    bool hasAwaiter() const noexcept { return state_ > State::Running; }
 
     template <void (BasePromise::*trampolineFn)()> void onResume() {
         CoroutineFrame::resumeFn = +[](CoroutineFrame* frame) {
@@ -419,15 +365,13 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
     // be distinguishable from the possible object representations of an
     // TypeErasedAwaiter. TypeErasedAwaiter consists of two non-null pointers.
     // The first (TypeErasedAwaiter::object_, aliased with State) is not
-    // aligned, but we can reasonably assume that 0x1 and 0x2 are not valid
-    // addresses. The second (TypeErasedAwaiter::functions_, aliased with
+    // aligned, but we can reasonably assume that 0x1 is not a valid
+    // address. The second (TypeErasedAwaiter::functions_, aliased with
     // CancelState) is aligned to a word size.
-    enum class State : size_t { Ready = 0, Running = 1, Stub = 2 };
+    enum class State : size_t { Ready = 0, Running = 1 };
     enum class CancelState : size_t { None = 0, Requested = 1 };
 
     /// Possible values of state_:
-    /// - State::Stub for promises associated with no coroutine,
-    ///   implementing just(T) or noop()
     /// - State::Ready for tasks scheduled for execution
     ///   (i.e., whose proxyHandle() resume()d)
     /// - State::Running for tasks being executed at the moment
@@ -570,34 +514,6 @@ template <> class ReturnValueMixin<void> {
     }
 };
 
-/// The promise type for a task that is not backed by a coroutine and
-/// immediately returns a value of type T when invoked. Used by just()
-/// and noop().
-template <class T> class StubPromise : public Promise<T> {
-  public:
-    explicit StubPromise(T value) : value_(std::forward<T>(value)) {
-        this->template makeStub<StubPromise, &StubPromise::onStart>(
-                /* deleteThisOnDestroy = */ true);
-    }
-
-  private:
-    void onStart() { this->return_value(std::forward<T>(value_)); }
-    T value_;
-};
-template <> class StubPromise<void> : public Promise<void> {
-  public:
-    static StubPromise& instance() {
-        static StubPromise inst;
-        return inst;
-    }
-
-  private:
-    StubPromise() {
-        this->template makeStub<StubPromise, &StubPromise::onStart>(
-                /* deleteThisOnDestroy = */ false);
-    }
-    void onStart() { this->return_void(); }
-};
 
 struct DestroyPromise {
     template <class T> void operator()(Promise<T>* p) const { p->destroy(); }

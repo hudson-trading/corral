@@ -24,6 +24,9 @@
 // SPDX-License-Identifier: MIT
 
 #pragma once
+
+#include <bit>
+
 #include "ErrorPolicy.h"
 #include "detail/Promise.h"
 #include "detail/TaskAwaiter.h"
@@ -33,7 +36,8 @@ namespace corral {
 
 namespace detail {
 class NurseryBase;
-}
+template <class> class ReadyAwaiter;
+} // namespace detail
 template <class PolicyT> class BasicNursery;
 
 
@@ -48,26 +52,34 @@ template <class T = void> class [[nodiscard]] Task : public detail::TaskTag {
     using ReturnType = T;
 
     Task() = default;
-    explicit Task(detail::Promise<T>& promise) : promise_(&promise) {}
+    explicit Task(detail::Promise<T>& promise) : storage_(&promise) {}
 
-    bool valid() const { return promise_.get() != nullptr; }
+    bool valid() const { return !storage_.isEmpty(); }
 
     /// co_await'ing on a task starts it and suspends the caller until its
     /// completion.
     Awaiter<T> auto operator co_await() noexcept {
-        return detail::TaskAwaiter<T>(promise_.get());
+        return detail::TaskAwaiter<T>(std::move(storage_));
     }
 
   private:
-    detail::Promise<T>* release() { return promise_.release(); }
+    explicit Task(std::in_place_t, detail::InhabitedType<T> value)
+      : storage_(std::forward<detail::InhabitedType<T>>(value)) {}
+
+    bool ready() const noexcept { return storage_.hasValue(); }
+    detail::Promise<T>* release() { return storage_.takePromise(); }
+    detail::InhabitedType<T> takeValue() && {
+        return std::move(storage_).takeValue();
+    }
 
   private:
-    detail::PromisePtr<T> promise_;
+    detail::ValueOrPromise<T> storage_;
 
     friend detail::NurseryBase;
     template <class, class, class...> friend class detail::TryBlock;
 
     template <class PolicyT> friend class BasicNursery;
+    template <class U> friend class detail::ReadyAwaiter;
 };
 
 namespace detail {
@@ -89,7 +101,7 @@ template <class T> class ReadyAwaiter {
     T await_resume() && { return std::forward<T>(value_); }
 
     template <std::constructible_from<T> U> operator Task<U>() && {
-        return Task<U>(*new StubPromise<U>(std::forward<T>(value_)));
+        return Task<U>(std::in_place, U(std::forward<T>(value_)));
     }
 
   private:
@@ -105,7 +117,7 @@ template <> class ReadyAwaiter<void> {
     bool await_must_resume() const noexcept { return true; }
     void await_resume() && {}
 
-    operator Task<void>() { return Task<void>(StubPromise<void>::instance()); }
+    operator Task<void>() { return Task<void>(std::in_place, Void{}); }
 };
 
 } // namespace detail
@@ -127,8 +139,22 @@ inline Awaitable<void> auto noop() {
 }
 
 /// Create a task that immediately returns a given value when co_await'ed.
+/// This may bypass heap allocation if the value is trivial and small enough
+/// to be stored in one machine word (and has a few unused bits).
 template <class T> Awaitable<T> auto just(T value) {
     return detail::ReadyAwaiter<T>(std::forward<T>(value));
+}
+
+/// Same as above, but for floating point numbers in cases where two
+/// least-significant bits of the mantissa can be sacrificed to avoid heap
+/// allocation.
+template <std::floating_point T> Awaitable<T> auto justApx(T value) {
+    if constexpr (sizeof(T) == sizeof(uintptr_t)) {
+        return just(std::bit_cast<T>(std::bit_cast<uintptr_t>(value) &
+                                     ~detail::ValueOrPromise<T>::Mask));
+    } else {
+        return just(value);
+    }
 }
 
 } // namespace corral

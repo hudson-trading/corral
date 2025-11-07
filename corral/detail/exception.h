@@ -115,11 +115,17 @@ class TryBlock final : public TryBlockBase, public NurseryScopeBase {
 #if __cpp_exceptions
             try {
 #endif
-                task_.reset(lambda(std::forward<Args>(args)...).release());
-                CORRAL_TRACE("   ...try-block %p (%s; pr = %p)", this,
-                             stageName(stage_), task_.get());
-                task_->setExecutor(executor_);
-                return task_->start(this, parent_);
+                auto task = lambda(std::forward<Args>(args)...);
+                if (task.ready()) {
+                    storeValue(std::move(task).takeValue());
+                    return continuation(nullptr);
+                } else {
+                    task_.reset(task.release());
+                    CORRAL_TRACE("   ...try-block %p (%s; pr = %p)", this,
+                                 stageName(stage_), task_.get());
+                    task_->setExecutor(executor_);
+                    return task_->start(this, parent_);
+                }
 #if __cpp_exceptions
             } catch (...) {
                 CORRAL_TRACE("   ...try-block %p, (%s; early-failed)", this,

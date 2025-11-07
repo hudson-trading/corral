@@ -181,6 +181,13 @@ CORRAL_TEST_CASE("nursery-member-function-lifetime") {
     };
 }
 
+CORRAL_TEST_CASE("nursery-imm-ready") {
+    CORRAL_WITH_NURSERY(n) {
+        n.start([] { return noop(); });
+        return just(join);
+    };
+}
+
 CORRAL_TEST_CASE("nursery-ret-policy") {
     auto sleep = [&](milliseconds delay) -> Task<void> {
         co_await t.sleep(delay);
@@ -318,6 +325,51 @@ CORRAL_TEST_CASE("nursery-exception") {
             },
             Catch::Equals("boo!"));
     CATCH_CHECK(t.now() == 0ms);
+}
+
+CORRAL_TEST_CASE("nursery-imm-fail-sibling") {
+    StageChecker stage;
+    try {
+        CORRAL_WITH_NURSERY(n) {
+            // Note: nursery block itself is not a coroutine
+
+            n.start([&]() -> Task<void> {
+                stage.require(1);
+                auto _ = stage.requireOnExit(2);
+                co_await SuspendForever{};
+            });
+
+            n.start([&]() -> Task<void> {
+                throw std::runtime_error("boo!");
+                return noop();
+            });
+
+            stage.require(0);
+            return just(join);
+        };
+    } catch (std::runtime_error& e) {
+        stage.require(3);
+        CATCH_CHECK(e.what() == std::string_view("boo!"));
+    }
+}
+
+CORRAL_TEST_CASE("nursery-imm-fail-nursery-block") {
+    StageChecker stage;
+    try {
+        CORRAL_WITH_NURSERY(n) {
+            n.start([&]() -> Task<void> {
+                stage.require(1);
+                auto _ = stage.requireOnExit(2);
+                co_await SuspendForever{};
+            });
+
+            stage.require(0);
+            throw std::runtime_error("boo!");
+        };
+    } catch (std::runtime_error& e) {
+        stage.require(3);
+        CATCH_CHECK(e.what() == std::string_view("boo!"));
+    }
 }
 #endif
 

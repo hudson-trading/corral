@@ -91,6 +91,24 @@ result is `T`. `Task<>` is an alias for `Task<void>`.
   : Awaiting on the `Task` starts executing the async function that it's
   wrapping, and suspends the caller until the function completes.
 
+
+```cpp
+template<class T> Awaitable<T> auto just(T);
+Awaitable<void> auto noop();
+
+template<std::floating_point T> Awaitable<T> auto justApx(T);
+```
+
+Constructs an immediately-ready awaiter, yielding a value of type `T`
+(for `just()`) or void (for `noop()`). These awaiters are immediately
+convertible to `Task<T>` (or `Task<void>`, respectively), and such conversion
+bypasses any heap allocations (provided `T` is small enough to fit into
+one machine word, and has a few spare bits in its binary representation
+to tell between a value and a coroutine).
+
+`justApx()` behaves like `just()`, but zeroes out two least-significant
+bits of the mantissa to avoid heap allocation.
+
 ### Nursery
 
 ```cpp
