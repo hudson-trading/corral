@@ -431,4 +431,61 @@ CORRAL_TEST_CASE("channel-bulk-zero-sized-read") {
     CATCH_CHECK(b == 1);
 }
 
+CORRAL_TEST_CASE("channel-empty-read") {
+    Channel<int> channel;
+    CATCH_REQUIRE(channel.empty());
+
+    auto v = channel.tryReceive();
+    CATCH_CHECK(!v);
+    std::vector<int> vec;
+    channel.tryReceive(std::back_inserter(vec));
+    CATCH_CHECK(vec.empty());
+    vec.resize(1);
+    size_t n = channel.tryReceive(vec);
+    CATCH_CHECK(n == 0);
+
+    auto [optv, _] = co_await anyOf(channel.receive(), t.sleep(1ms));
+    CATCH_CHECK(!optv);
+    CATCH_CHECK(t.now() == 1ms);
+
+    vec.clear();
+    co_await anyOf(channel.receive(std::back_inserter(vec)), t.sleep(1ms));
+    CATCH_CHECK(vec.empty());
+    CATCH_CHECK(t.now() == 2ms);
+
+    vec.resize(1);
+    auto [optn, __] = co_await anyOf(channel.receive(vec), t.sleep(1ms));
+    CATCH_CHECK(!optn);
+    CATCH_CHECK(t.now() == 3ms);
+}
+
+CORRAL_TEST_CASE("channel-full-write") {
+    Channel<int> channel(2);
+    channel.trySend(1);
+    channel.trySend(2);
+    CATCH_REQUIRE(channel.full());
+
+    bool b = channel.trySend(3);
+    CATCH_CHECK(!b);
+    std::vector<int> vec{3, 4};
+    auto it = channel.trySend(vec.begin(), vec.end());
+    CATCH_CHECK(it == vec.begin());
+
+    size_t n = channel.trySend(vec);
+    CATCH_CHECK(n == 0);
+
+    auto [sent1, _] = co_await anyOf(channel.send(3), t.sleep(1ms));
+    CATCH_CHECK(!sent1);
+    CATCH_CHECK(t.now() == 1ms);
+
+    auto [sent2, __] =
+            co_await anyOf(channel.send(vec.begin(), vec.end()), t.sleep(1ms));
+    CATCH_CHECK(!sent2);
+    CATCH_CHECK(t.now() == 2ms);
+
+    auto [sent3, ___] = co_await anyOf(channel.send(vec), t.sleep(1ms));
+    CATCH_CHECK(!sent3);
+    CATCH_CHECK(t.now() == 3ms);
+}
+
 } // namespace

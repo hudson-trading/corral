@@ -362,8 +362,9 @@ struct Channel : public detail::channel::ReadHalf<T>,
     /// Retrieve and return up to `n` objects from the channel, writing them
     /// to `out`. If no elements are immediately available, does nothing
     /// and returns `out` unmodified.
-    template <std::output_iterator<T> It> It tryReceive(size_t n, It out) {
-        return readHalf().tryReceive(n, std::move(out));
+    template <std::output_iterator<T> It>
+    It tryReceive(It out, size_t n = static_cast<size_t>(-1)) {
+        return readHalf().tryReceive(std::move(out), n);
     }
 
     /// Retrieve and return up to `n` objects from the channel, writing them
@@ -617,6 +618,9 @@ size_t ReadHalf<T>::tryTransfer(size_t claimedCount, R&& range) {
     size_t n = claimedCount + unclaimedCount();
     if constexpr (std::ranges::forward_range<R>) {
         n = std::min<size_t>(n, std::ranges::distance(range));
+    }
+    if (n == 0) {
+        return 0;
     }
     CORRAL_ASSERT(!channel().buf_.empty());
 
