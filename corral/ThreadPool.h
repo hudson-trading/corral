@@ -41,6 +41,11 @@
 #include "detail/platform.h"
 #include "detail/utility.h"
 
+#ifndef _WIN32
+#include <signal.h>
+#endif
+
+
 namespace corral {
 
 /// A thread pool, for running CPU-bound tasks asynchronously.
@@ -380,6 +385,30 @@ struct ThreadPool::ThreadNotificationImpl : ThreadPool::IThreadNotification {
     CORRAL_NO_UNIQUE_ADDR corral::ThreadNotification<EventLoopT> impl_;
 };
 
+namespace detail {
+[[nodiscard]] inline auto blockSignals() {
+#ifndef _WIN32
+    sigset_t set, savedSet;
+    sigfillset(&set);
+    sigdelset(&set, SIGSEGV); // these should not be blocked according
+    sigdelset(&set, SIGBUS);  // to `man sigprocmask`
+    sigdelset(&set, SIGFPE);
+    sigdelset(&set, SIGILL);
+
+    int r1 [[maybe_unused]] = pthread_sigmask(SIG_BLOCK, &set, &savedSet);
+    CORRAL_ASSERT(r1 == 0 && "pthread_sigmask() failed");
+
+    return ScopeGuard([savedSet]() {
+        int r2 [[maybe_unused]] =
+                pthread_sigmask(SIG_SETMASK, &savedSet, nullptr);
+        CORRAL_ASSERT(r2 == 0 && "pthread_sigmask() failed");
+    });
+#else
+    return std::monostate{};
+#endif
+}
+} // namespace detail
+
 
 // Public API
 
@@ -392,6 +421,8 @@ inline ThreadPool::ThreadPool(EventLoopT& eventLoop, unsigned threadCount)
     d->sq.reset(new Slot[d->sqCapacity]);
     d->notification = std::make_unique<ThreadNotificationImpl<EventLoopT>>(
             eventLoop, &ThreadPool::tick, this);
+
+    auto guard = detail::blockSignals();
 
     d->threads.reserve(threadCount);
     for (size_t i = 0; i < threadCount; ++i) {
