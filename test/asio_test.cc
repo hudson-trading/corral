@@ -135,9 +135,24 @@ CORRAL_BOOST_ASIO_TEST_CASE("asio-socket-smoke", "[asio]") {
 CORRAL_BOOST_ASIO_TEST_CASE("asio-thread-pool", "[asio]") {
     corral::ThreadPool tp(io, 2);
 
-    CATCH_SECTION("smoke") {
+    CATCH_SECTION("smoke-void") {
+        std::atomic<bool> called = false;
+        co_await tp.run([&] { called.store(true); });
+        CATCH_CHECK(called.load());
+    }
+
+    CATCH_SECTION("smoke-value") {
         auto tid = co_await tp.run([] { return std::this_thread::get_id(); });
         CATCH_CHECK(tid != std::this_thread::get_id());
+    }
+
+    CATCH_SECTION("reference") {
+        int x = 0;
+        int& y = co_await tp.run([&x]() -> int& { return x; });
+        CATCH_CHECK(&x == &y);
+
+        int&& ry = co_await tp.run([&x]() -> int&& { return std::move(x); });
+        CATCH_CHECK(&x == &ry);
     }
 
     CATCH_SECTION("exception") {
@@ -175,6 +190,49 @@ CORRAL_BOOST_ASIO_TEST_CASE("asio-thread-pool", "[asio]") {
             cancelled = true;
         });
         CATCH_CHECK(ret == 42);
+    }
+
+    CATCH_SECTION("early-cancellation") {
+        std::atomic<bool> called{false};
+        co_await anyOf(std::suspend_never{}, tp.run([&] { called = true; }));
+        CATCH_CHECK(!called.load());
+    }
+}
+
+// A thread pool with zero threads runs tasks inline.
+CORRAL_BOOST_ASIO_TEST_CASE("asio-degenerate-thread-pool", "[asio]") {
+    corral::ThreadPool tp(io, 0);
+
+    CATCH_SECTION("smoke-void") {
+        bool called = false;
+        co_await tp.run([&] { called = true; });
+        CATCH_CHECK(called);
+    }
+
+    CATCH_SECTION("smoke-value") {
+        auto tid = co_await tp.run([] { return std::this_thread::get_id(); });
+        CATCH_CHECK(tid == std::this_thread::get_id());
+    }
+
+    CATCH_SECTION("reference") {
+        int x = 0;
+        int& y = co_await tp.run([&x]() -> int& { return x; });
+        CATCH_CHECK(&x == &y);
+
+        int&& ry = co_await tp.run([&x]() -> int&& { return std::move(x); });
+        CATCH_CHECK(&x == &ry);
+    }
+
+    CATCH_SECTION("exception") {
+        CATCH_CHECK_THROWS_WITH(
+                co_await tp.run([] { throw std::runtime_error("boo!"); }),
+                Catch::Equals("boo!"));
+    }
+
+    CATCH_SECTION("early-cancellation") {
+        std::atomic<bool> called{false};
+        co_await anyOf(std::suspend_never{}, tp.run([&] { called = true; }));
+        CATCH_CHECK(!called.load());
     }
 }
 

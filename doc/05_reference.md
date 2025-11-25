@@ -886,11 +886,16 @@ class ThreadPool {
       requires (std::invocable<F, Args...>
              || std::invocable<F, Args..., CancelToken>)
     Awaitable auto run(F&&, Args&&...);
+
+    bool isDegenerate() const noexcept;
 };
 
 class ThreadPool::CancelToken {
   public:
     explicit operator bool() noexcept;
+
+    book peek() const noexcept;
+    void consume() noexcept;
 };
 ```
 
@@ -902,6 +907,8 @@ A tool for offloading CPU-bound work, allowing it to run concurrently with the m
     to thread running `eventLoop`.
     A specialization of `ThreadNotification` for the event loop type must be defined
     (see below).
+    If zero thread count is specified, tasks are run inline in the calling thread,
+    and no worker threads are created.
 
 * `template<class F, class... Args> Awaitable auto run(F&&, Args&&...)`
   : Submits a regular (synchronous) function to the thread pool, to be executed
@@ -912,12 +919,46 @@ A tool for offloading CPU-bound work, allowing it to run concurrently with the m
     can be queried periodically for the cancellation status of the awaitable
     (see below).
 
-* `ThreadPool::CancelToken::operator bool()`
+* `bool ThreadPool::isDegenerate() const noexcept`
+  : Returns whether the thread pool was constructed with zero threads, and would
+    run any submitted tasks inline.
+
+* `ThreadPool::CancelToken::operator bool() noexcept`
   : Returns true if cancellation of the coroutine suspended on `ThreadPool::run()`
     has been requested. Also marks the cancellation request confirmed,
     so if returned true, any return value or generated exception will be discarded.
     The coroutine will remain suspended until the function returns.
 
+* `bool ThreadPool::CancelToken::peek() const noexcept`
+  : Queries the cancellation status (like `operator bool()`),
+    but does not confirm the cancellation.
+
+* `void ThreadPool::CancelToken::consume() noexcept`
+  : Marks the cancellation as taken.
+
+
+```cpp
+class DegenerateThreadPool {
+  public:
+    class CancelToken;
+
+    DegenerateThreadPool();
+
+    template<class EventLoopT>
+    DegenerateThreadPool(EventLoopT&, std::nullptr_t);
+
+    template<class F, class... Args>
+      requires (std::invocable<F, Args...>
+             || std::invocable<F, Args..., CacncelToken>)
+    Awaitable auto run(F&&, Args&&...);
+
+    std::true_type isDegenerate() const noexcept;
+};
+```
+
+A class API-compatible with `ThreadPool`, but always running tasks inline.
+May be used in contexts where one needs to run a task in a thread pool on best-effort
+basis (or inline if multithreading is not available).
 
 ### ThreadNotification
 

@@ -42,3 +42,6 @@
 #include "ParkingLot.h"
 #include "Semaphore.h"
 #include "Value.h"
+
+// Miscellanea
+#include "DegenerateThreadPool.h"

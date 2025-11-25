@@ -31,15 +31,16 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <numeric>
 #include <thread>
 #include <utility>
+#include <vector>
 
+#include "DegenerateThreadPool.h"
 #include "concepts.h"
 #include "detail/IntrusivePtr.h"
-#include "detail/platform.h"
-#include "detail/utility.h"
 
 #ifndef _WIN32
 #include <signal.h>
@@ -53,7 +54,9 @@ namespace corral {
 /// All public methods of ThreadPool (constructor, destructor, and `run()`)
 /// must be called from the same thread in which the event loop passed to the
 /// constructor is running.
-class ThreadPool : public detail::Noncopyable {
+class ThreadPool {
+    class Task;
+    template <class F, class... Args> class TaskImpl;
     enum CancelState : uint8_t;
 
   public:
@@ -61,9 +64,6 @@ class ThreadPool : public detail::Noncopyable {
     /// `ThreadPool.run()`, that can be tested from within the task that's
     /// running in the thread pool.
     class CancelToken {
-        std::atomic<CancelState>* state_;
-        friend class ThreadPool;
-
       public:
         /// Test whether cancellation has been requested. Once `true` is
         /// returned here, the cancellation is considered to have been taken:
@@ -82,11 +82,24 @@ class ThreadPool : public detail::Noncopyable {
         /// Marks the cancellation as taken.
         /// No-op if the cancellation was not requested or already consumed.
         void consume() noexcept;
+
+      private /*methods*/:
+        explicit CancelToken(std::atomic<CancelState>& state) noexcept
+          : state_(&state) {}
+
+      private /*fields*/:
+        std::atomic<CancelState>* state_;
+
+        template <class, class...> friend class TaskImpl;
     };
+
 
     /// Constructor.
     /// Requires a specialization of `corral::ThreadNotification`
     /// to be defined for the event loop (see corral/defs.h for details).
+    ///
+    /// `threadCount` can be zero; in such a case the thread pool will
+    /// run tasks inline in the calling thread.
     template <class EventLoopT>
     ThreadPool(EventLoopT& eventLoop, unsigned threadCount);
 
@@ -100,9 +113,17 @@ class ThreadPool : public detail::Noncopyable {
     ///
     /// `fn` may optionally accept a `CancelToken` as its last argument
     /// to periodically check if cancellation of the calling coroutine has been
-    /// requested, and wrap up early if so. Querying the token
-    /// for the cancellation status counts as confirming the cancellation
-    /// request; any returned value (or exception) will be discarded.
+    /// requested, and wrap up early if so:
+    ///
+    ///     co_await threadPool.run([&](ThreadPool::CancelToken cancelled) {
+    ///         while (!cancelled) {
+    ///             // do a chunk of work
+    ///         }
+    ///     });
+    ///
+    /// Querying the token for the cancellation status counts as confirming the
+    /// cancellation request; any returned value (or exception) will be
+    /// discarded.
     ///
     /// Any references passed as `args` are *not* decay-copied, which is fine
     /// in typical use cases (`co_await threadPool.run(fn, args...)` -- iow,
@@ -115,11 +136,11 @@ class ThreadPool : public detail::Noncopyable {
                  std::invocable<F, Args..., ThreadPool::CancelToken>)
     Awaitable auto run(F&& f, Args&&... args);
 
+    /// If true (i.e., if the thread pool was constructed with zero threads),
+    /// any submitted tasks will be run inline in the calling thread.
+    bool isDegenerate() const noexcept { return !d; }
 
   private:
-    class Task;
-    template <class F, class... Args> class TaskImpl;
-
     struct IThreadNotification;
     template <class EventLoopT> struct ThreadNotificationImpl;
 
@@ -227,8 +248,7 @@ class ThreadPool : public detail::Noncopyable {
 // Implementation
 //
 
-
-// Task
+// CancelToken
 
 enum ThreadPool::CancelState : uint8_t { None, Requested, Confirmed };
 
@@ -250,6 +270,9 @@ inline void ThreadPool::CancelToken::consume() noexcept {
                                     std::memory_order_release);
 }
 
+
+// Task
+
 class ThreadPool::Task {
     explicit Task(ThreadPool* pool) : pool_(pool) {}
 
@@ -266,42 +289,32 @@ class ThreadPool::Task {
 };
 
 template <class F, class... Args>
-class ThreadPool::TaskImpl final : public Task {
-    static decltype(auto) doRun(F&& f,
-                                std::tuple<Args...>&& argTuple,
-                                CancelToken tok) {
-        return std::apply(
-                [&f, tok](Args&&... args) {
-                    if constexpr (std::is_invocable_v<F, Args...,
-                                                      CancelToken>) {
-                        return std::forward<F>(f)(std::forward<Args>(args)...,
-                                                  tok);
-                    } else {
-                        (void) tok; // no [[maybe_unused]] in lambda captures
-                        return std::forward<F>(f)(std::forward<Args>(args)...);
-                    }
-                },
-                std::move(argTuple));
-    }
-    using Ret = decltype(doRun(std::declval<F>(),
-                               std::declval<std::tuple<Args...>>(),
-                               std::declval<CancelToken>()));
-
+class ThreadPool::TaskImpl final
+  : public Task,
+    public detail::ThreadPoolTaskBase<CancelToken, F, Args...> {
   public:
     TaskImpl(ThreadPool* pool, F f, Args... args)
       : Task(pool),
-        f_(std::forward<F>(f)),
-        args_(std::forward<Args>(args)...) {}
+        TaskImpl::ThreadPoolTaskBase(std::forward<F>(f),
+                                     std::forward<Args>(args)...),
+        cancelState_(CancelState::None) {}
 
-    bool await_ready() const noexcept { return false; }
-    void await_suspend(Handle h) {
+    bool await_suspend(Handle h) {
+        if (pool_->isDegenerate()) [[unlikely]] {
+            // Run immediately.
+            this->doRun(CancelToken(cancelState_));
+            return false;
+        }
+
         parent_ = h;
         if (!pool_->pushToSQ(this)) {
             // No space in the submission queue; stash to the local queue
             // to submit later.
             pool_->pushToBackoffSQ(this);
         }
+        return true;
     }
+
     bool await_cancel(Handle) noexcept {
         cancelState_.store(CancelState::Requested, std::memory_order_release);
         return false;
@@ -310,31 +323,11 @@ class ThreadPool::TaskImpl final : public Task {
         return cancelState_.load(std::memory_order_acquire) !=
                CancelState::Confirmed;
     }
-    Ret await_resume() && { return std::move(result_).value(); }
-
-    void run() override {
-        CancelToken token;
-        token.state_ = &cancelState_;
-
-#if __cpp_exceptions
-        try {
-#endif
-            if constexpr (std::is_same_v<Ret, void>) {
-                doRun(std::forward<F>(f_), std::move(args_), std::move(token));
-                result_.storeValue(detail::Void{});
-            } else {
-                result_.storeValue(doRun(std::forward<F>(f_), std::move(args_),
-                                         std::move(token)));
-            }
-#if __cpp_exceptions
-        } catch (...) { result_.storeException(); }
-#endif
-    }
 
   private:
-    F f_;
-    std::tuple<Args...> args_;
-    detail::Result<Ret> result_;
+    void run() override { this->doRun(CancelToken(cancelState_)); }
+
+  private:
     std::atomic<CancelState> cancelState_;
 };
 
@@ -414,7 +407,11 @@ namespace detail {
 
 template <class EventLoopT>
 inline ThreadPool::ThreadPool(EventLoopT& eventLoop, unsigned threadCount)
-  : d(new Data) {
+  : d(threadCount ? new Data : nullptr) {
+    if (threadCount == 0) [[unlikely]] {
+        return;
+    }
+
     // Round up the capacity to be a power of 2, so it'll be mutually prime
     // with Stride (see below).
     d->sqCapacity = std::bit_ceil(threadCount) * 512;
@@ -431,6 +428,10 @@ inline ThreadPool::ThreadPool(EventLoopT& eventLoop, unsigned threadCount)
 }
 
 inline ThreadPool::~ThreadPool() {
+    if (!d) [[unlikely]] {
+        return;
+    }
+
     CORRAL_ASSERT(d->backoffSqHead == nullptr);
 
     for (size_t i = 0; i < d->threads.size(); ++i) {

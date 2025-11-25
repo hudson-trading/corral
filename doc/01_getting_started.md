@@ -708,3 +708,10 @@ If a function queries its `CancelToken` and it returns true, corral
 considers this to be a confirmation of the cancellation. When such
 a function returns (normally or through an exception), its result
 is discarded, and cancellation continues normally.
+
+There is also `DegenerateThreadPool` class, which is API-compatible with
+ThreadPool, but always runs tasks inline (and does not depend on threading
+support part of STL, like `<thread>`). This may be helpful in scenarios
+"run a task in a thread pool if compiled on a platform with multithreading
+support, or inline otherwise". `ThreadPool` can also be constructed
+with zero thread count for the same effect.

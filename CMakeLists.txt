@@ -27,6 +27,7 @@ target_sources(corral
   corral/Shared.h
   corral/Task.h
   corral/ThreadPool.h
+  corral/DegenerateThreadPool.h
   corral/utility.h
   corral/Value.h
   corral/wait.h

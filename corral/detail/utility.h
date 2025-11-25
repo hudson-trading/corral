@@ -32,6 +32,7 @@
 #include "../concepts.h"
 #include "../config.h"
 #include "../defs.h"
+#include "../detail/platform.h"
 #include "frames.h"
 
 namespace corral {
