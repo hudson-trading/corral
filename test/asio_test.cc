@@ -29,6 +29,7 @@
 #if __cpp_exceptions
 
 #include <chrono>
+#include <functional>
 
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
@@ -271,6 +272,57 @@ CORRAL_BOOST_ASIO_TEST_CASE("asio-thread-pool-stress", "[asio]") {
         // These run around 100us each
         co_await runStress(50000, 1000);
     }
+}
+
+struct dynamic_buffer_init {
+    template<typename CompletionHandler, typename DynamicBuffer>
+    void operator()(CompletionHandler h, DynamicBuffer&&) const {
+        std::move(h)(boost::system::error_code{});
+    }
+};
+
+template<typename DynamicBuffer, typename CompletionToken>
+auto maybe_streambuf_op(DynamicBuffer&& buffer, CompletionToken&& token) ->
+    decltype(
+        boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
+            dynamic_buffer_init{},
+            token,
+            std::forward<DynamicBuffer>(buffer)))
+{
+    return
+        boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
+            dynamic_buffer_init{},
+            token,
+            std::forward<DynamicBuffer>(buffer));
+}
+
+struct streambuf_init {
+    template<typename CompletionHandler>
+    void operator()(CompletionHandler h, boost::asio::streambuf&) const {
+        std::move(h)(boost::system::error_code{});
+    }
+};
+
+template<typename CompletionToken>
+auto maybe_streambuf_op(boost::asio::streambuf& buf, CompletionToken&& token) ->
+    decltype(
+        boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
+            streambuf_init{},
+            token,
+            std::ref(buf)))
+{
+    return
+        boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
+            streambuf_init{},
+            token,
+            std::ref(buf));
+}
+
+CORRAL_BOOST_ASIO_TEST_CASE("asio-initiate-sfinae-friendly", "[asio]") {
+    boost::asio::streambuf buf;
+    // Without the correct constraints on initiate(...) this fails to compile
+    // (seemingly only on Clang)
+    co_await maybe_streambuf_op(buf, corral::asio_awaitable);
 }
 
 namespace beast = boost::beast;

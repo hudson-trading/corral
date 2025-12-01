@@ -26,6 +26,7 @@
 #pragma once
 
 #include <chrono>
+#include <type_traits>
 
 #include "../Executor.h"
 #include "utility.h"
@@ -290,6 +291,7 @@ struct AsyncResultImpl {
     /// don't use `return_type` and instead have `auto` for their return types
     /// will do without type erase.
     template <class Init, class... Args>
+        requires (std::is_move_constructible_v<Args> && ...)
     static auto initiate(Init&& init,
                          asio_awaitable_t<ThrowOnError>,
                          Args... args) {
