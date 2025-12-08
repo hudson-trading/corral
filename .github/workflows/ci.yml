@@ -2,7 +2,6 @@ name: Build and run tests
 
 on:
   push:
-    branches: [ "master" ]
   pull_request:
 
 jobs:
@@ -145,3 +144,23 @@ jobs:
       - name: Test
         run: cd ${{ github.workspace }}/build && env ${{ matrix.env }} ctest --output-on-failure
 
+
+  installation_check:
+    runs-on: ubuntu-24.04
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get -q -q update
+          sudo apt-get install -q -q -y make cmake git g++
+
+      - name: Configure
+        run: cmake -S . -B ./build/to_install -DCMAKE_INSTALL_PREFIX=./install_dir -DCMAKE_SKIP_INSTALL_RULES=0
+
+      - name: Install in a folder
+        run: cmake --install ./build/to_install
+
+      - name: Test if usable
+        run: cmake -S . -B ./build/to_try_use_installed -DCORRAL_TEST_INSTALLED_VERSION=1 -DCMAKE_PREFIX_PATH=./install_dir
