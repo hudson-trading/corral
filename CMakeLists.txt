@@ -1,54 +1,39 @@
 cmake_minimum_required(VERSION 3.15)
-project(corral)
+
+set(CORRAL_VERSION 0.20251214)
+
+if(CORRAL_TEST_INSTALLED_VERSION)
+  find_package(corral ${CORRAL_VERSION} REQUIRED)
+
+  message("corral_FOUND: ${corral_FOUND}")
+
+  add_library(dummy_target INTERFACE)
+
+  target_link_libraries(dummy_target INTERFACE corral::corral)
+
+  find_package(PkgConfig)
+
+  pkg_check_modules(corral GLOBAL IMPORTED_TARGET corral)
+
+  add_library(dummy_target2 INTERFACE)
+
+  target_link_libraries(dummy_target2 INTERFACE PkgConfig::corral)
+  return()
+endif()
+
+project(corral VERSION ${CORRAL_VERSION})
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(
-  corral
-  INTERFACE
-)
-target_sources(corral
-  INTERFACE
-  corral/asio.h
-  corral/CBPortal.h
-  corral/Channel.h
-  corral/concepts.h
-  corral/config.h
-  corral/defs.h
-  corral/Event.h
-  corral/Executor.h
-  corral/corral.h
-  corral/Nursery.h
-  corral/ParkingLot.h
-  corral/run.h
-  corral/Semaphore.h
-  corral/Shared.h
-  corral/Task.h
-  corral/ThreadPool.h
-  corral/DegenerateThreadPool.h
-  corral/utility.h
-  corral/Value.h
-  corral/wait.h
-  corral/detail/ABI.h
-  corral/detail/exception.h
-  corral/detail/frames.h
-  corral/detail/introspect.h
-  corral/detail/IntrusiveList.h
-  corral/detail/IntrusivePtr.h
-  corral/detail/ParkingLot.h
-  corral/detail/platform.h
-  corral/detail/PointerBits.h
-  corral/detail/Promise.h
-  corral/detail/Queue.h
-  corral/detail/ScopeGuard.h
-  corral/detail/TaskAwaiter.h
-  corral/detail/utility.h
-  corral/detail/wait.h
-)
+add_library(corral INTERFACE)
+add_library(corral::corral ALIAS corral)
 
-target_include_directories(corral INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(
+  corral INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+                   $<INSTALL_INTERFACE:include>
+)
 
 option(SKIP_TESTS "Do not build corral unit tests.")
 if(NOT ${SKIP_TESTS})
@@ -159,12 +144,58 @@ endif()
 # Installation
 #
 
-install(DIRECTORY corral DESTINATION include)
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+install(DIRECTORY ${CMAKE_CURRENT_LIST_DIR}/${PROJECT_NAME}
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
 install(
-  TARGETS corral
-  EXPORT corralTargets
-  INCLUDES
-  DESTINATION include
+  TARGETS ${PROJECT_NAME}
+  EXPORT ${PROJECT_NAME}Targets
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+install(
+  EXPORT ${PROJECT_NAME}Targets
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/cmake/${PROJECT_NAME}/
+  NAMESPACE ${PROJECT_NAME}::
+)
+
+file(WRITE "${CMAKE_BINARY_DIR}/${PROJECT_NAME}Config.cmake.in"
+  "@PACKAGE_INIT@\ninclude(\$\{CMAKE_CURRENT_LIST_DIR\}/${PROJECT_NAME}Targets.cmake)"
+)
+
+configure_package_config_file(
+  ${CMAKE_BINARY_DIR}/${PROJECT_NAME}Config.cmake.in
+  ${CMAKE_BINARY_DIR}/${PROJECT_NAME}Config.cmake
+  INSTALL_DESTINATION ${CMAKE_INSTALL_DATADIR}/cmake/${PROJECT_NAME}
+)
+
+install(FILES "${CMAKE_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/cmake/${PROJECT_NAME}
+)
+
+write_basic_package_version_file(
+  ${CMAKE_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake
+  VERSION ${PROJECT_VERSION}
+  COMPATIBILITY AnyNewerVersion ARCH_INDEPENDENT
+)
+
+install(FILES "${CMAKE_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/cmake/${PROJECT_NAME}
+)
+
+file(
+  GENERATE
+  OUTPUT "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.pc"
+  CONTENT
+    "prefix=${CMAKE_INSTALL_PREFIX}\nincludedir=\$\{prefix\}/include\nName: ${PROJECT_NAME}\nDescription: Lightweight structured concurrency for C++20\nVersion: ${PROJECT_VERSION}\nCflags: -I\$\{includedir\}\n"
+)
+
+install(FILES "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.pc"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/pkgconfig
 )
 
 #
