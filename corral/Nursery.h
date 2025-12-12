@@ -551,7 +551,7 @@ class NurseryStartAwaiter
     bool isCancelling() const { return executor_.bits() & Cancelling; }
     void setCancelling() { executor_.setBits(Cancelling); }
 
-    Handle continuation(detail::BasePromise* p) noexcept override {
+    Handle continuation(detail::BasePromise* /*p*/) noexcept override {
         if (BasicNursery<Policy>* n = std::exchange(nursery_, nullptr)) {
             // The task completed without calling TaskStarted<>::operator().
             --n->pendingTaskCount_;

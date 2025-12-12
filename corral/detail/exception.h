@@ -154,6 +154,7 @@ class TryBlock final : public TryBlockBase, public YieldsLikeAwaitTag {
     }
 
     Handle continuation(BasePromise* p) noexcept override {
+        (void)p;
         CORRAL_TRACE("Try-block %p (stage %s, pr %p) %s, %s.", this,
                      stageName(stage_), p,
                      exception_ ? "raised an exception" : "exited normally",

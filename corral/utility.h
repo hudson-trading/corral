@@ -55,7 +55,7 @@ class SuspendForever {
     bool await_ready() const noexcept { return false; }
     void await_suspend(Handle) {}
     [[noreturn]] void await_resume() { detail::unreachable(); }
-    auto await_cancel(Handle h) noexcept { return std::true_type{}; }
+    auto await_cancel(Handle /*h*/) noexcept { return std::true_type{}; }
     void await_introspect(auto& c) const noexcept {
         c.node("SuspendForever", this);
     }
@@ -175,7 +175,7 @@ template <class Awaitable> auto disposable(Awaitable awaitable) {
 ///
 /// Make sure not to throw any exceptions from the awaitable, as they
 /// will terminate() the process.
-template <Awaitable<void> Aw> auto untilCancelledAnd(Aw&& awaitable) {
+template <Awaitable Aw> auto untilCancelledAnd(Aw&& awaitable) {
     return makeAwaitable<detail::RunOnCancel<Aw>>(std::forward<Aw>(awaitable));
 }
 

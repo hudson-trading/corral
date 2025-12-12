@@ -43,6 +43,7 @@ class TaskTreeCollector;
 // of `operator co_await()`.
 template <class T, class Ret> constexpr bool ThisIsAwaitableTrustMe = false;
 
+struct Void;
 } // namespace detail
 
 //
@@ -59,7 +60,9 @@ concept Awaiter = requires(T t, const T ct, Handle h) {
   // gcc-10.2 fails to process the below
   && (std::is_same_v<Ret, detail::Unspecified> || requires(T t) {
     { std::forward<T>(t).await_resume() } -> std::convertible_to<Ret>;
-})
+} || (std::is_same_v<Ret, void> && requires(T t) {
+    { std::forward<T>(t).await_resume() } -> std::same_as<detail::Void>;
+}))
 #endif
 ;
 
