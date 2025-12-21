@@ -312,9 +312,7 @@ class BasicUnsafeNursery final : public BasicNursery<Policy>, private Executor {
     /// will produce undefined behavior.
     void close() {
         if (!this->tasks_.empty()) {
-            this->schedule(
-                    +[](BasicUnsafeNursery* self) noexcept { self->cancel(); },
-                    this);
+            this->schedule([this]() noexcept { this->cancel(); });
         }
         this->Executor::drain();
         assertEmpty();
@@ -729,18 +727,14 @@ inline Handle NurseryBase::continuation(BasePromise* promise) noexcept {
     // scope guards, essentially interrupting the coroutine which called
     // Nursery::cancel().
     if (promise) {
-        executor->runSoon(
-                +[](detail::BasePromise* p) noexcept { p->destroy(); },
-                promise);
+        executor->runSoon([promise]() noexcept { promise->destroy(); });
     }
 
     // To be extra safe, defer the resume() call to the executor as well,
     // so we can be sure we don't resume the parent before destroying the frame
     // of the last child.
     if (ret != noopHandle()) {
-        executor->runSoon(
-                +[](void* arg) noexcept { Handle::from_address(arg).resume(); },
-                ret.address());
+        executor->runSoon([ret]() noexcept { ret.resume(); });
     }
     return std::noop_coroutine();
 }
@@ -769,11 +763,7 @@ inline void NurseryBase::doCancel() {
     ex->capture(
             [this] {
                 for (detail::BasePromise& t : tasks_) {
-                    executor()->schedule(
-                            +[](detail::BasePromise* p) noexcept {
-                                p->cancel();
-                            },
-                            &t);
+                    executor()->schedule([&t]() noexcept { t.cancel(); });
                 }
             },
             taskCount_);

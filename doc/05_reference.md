@@ -1041,8 +1041,7 @@ Awaitable auto annotate(std::string annotation, T&&);
 ```cpp
 class Executor {
   public:
-    template <class T>
-    void runSoon(void (*fn)(T*), T* arg);
+    void runSoon(std::invocable auto fn);
     void drain();
     void capture(std::invocable<> auto&& fn);
 };
@@ -1064,10 +1063,13 @@ There are two ways to get ahold of the executor:
 
 Once you have the executor, you can use it as follows:
 
-* `template <class T> void Executor::runSoon(void (*fn)(T*), T* arg)`
-  : Add `fn(arg)` to the list of operations to run. It will run immediately
+* `void Executor::runSoon(std::invocable auto fn)`
+  : Add `fn()` to the list of operations to run. It will run immediately
   unless an executor is already running, in which case it will be executed
   on the next executor loop.
+  The passed in lambda can have up to one pointer worth of context, and must
+  be trivially copyable and destructible (typically it would capture one variable
+  by reference).
 
 * `void Executor::drain()`
   : Immediately execute everything that has been scheduled so far. Unlike

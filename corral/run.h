@@ -71,13 +71,11 @@ class Runner : private RunnerTracking, private TaskFrame {
         if (!awaiter.await_ready()) {
             CoroutineFrame::resumeFn = +[](CoroutineFrame* frame) {
                 auto runner = static_cast<Runner*>(frame);
-                runner->executor_->runSoon(
-                        +[](Runner* r) noexcept {
-                            EventLoop* eventLoop =
-                                    std::exchange(r->eventLoop_, nullptr);
-                            ELTraits::stop(*eventLoop);
-                        },
-                        runner);
+                runner->executor_->runSoon([runner]() noexcept {
+                    EventLoop* eventLoop =
+                            std::exchange(runner->eventLoop_, nullptr);
+                    ELTraits::stop(*eventLoop);
+                });
             };
             TaskFrame::pc =
                     reinterpret_cast<uintptr_t>(CORRAL_RETURN_ADDRESS());

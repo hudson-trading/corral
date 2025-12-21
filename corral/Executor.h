@@ -26,6 +26,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <string.h>
 
 #include <cstdint>
 #include <iterator>
@@ -46,7 +47,15 @@ namespace detail {
 template <class Aw>
 concept RootAwaitable = Introspectable<Aw> || Awaiter<Aw>;
 
-}
+/// A callable which can be stored in one pointer-sized variable
+/// and freely moved around.
+template <class F, class R, class... Args>
+concept TrivialCallable = std::is_nothrow_invocable_r_v<R, F, Args...> &&
+                          std::is_trivially_copyable_v<F> &&
+                          std::is_trivially_destructible_v<F> &&
+                          sizeof(F) <= sizeof(void*);
+
+} // namespace detail
 
 /// A lightweight executor for coroutine resumptions and other actions
 /// that corral might need to defer for a short time.
@@ -163,11 +172,14 @@ class Executor {
         }
     }
 
-    /// Arranges `fn(arg)` to be called on the next executor loop,
+    /// Arranges `c()` to be called on the next executor loop,
     /// then runs the executor loop unless already running
     /// (see below for details).
-    template <class T> void runSoon(void (*fn)(T*) noexcept, T* arg) {
-        schedule(fn, arg);
+    ///
+    /// The passed in callable can hold up to one pointer worth
+    /// of context, and should be trivially copyable and destructible.
+    void runSoon(detail::TrivialCallable<void> auto c) {
+        schedule(c);
         runSoon();
     }
 
@@ -175,16 +187,20 @@ class Executor {
     /// This function is reenterant.
     void drain() { drain(*ready_); }
 
-    /// Arranges `fn(arg)` to be called on the next executor loop,
+    /// Arranges `c()` to be called on the next executor loop,
     /// but does *not* run the executor loop.
     ///
     /// The caller should arrange runSoon() to be called at some point
     /// in the future, or else the callback will never be called.
     ///
     /// This is an advanced interface that should be used with care.
-    template <class T> void schedule(void (*fn)(T*) noexcept, T* arg) {
-        ready_->emplace_back(reinterpret_cast<void (*)(void*) noexcept>(fn),
-                             arg);
+    template <detail::TrivialCallable<void> Callable>
+    void schedule(Callable c) {
+        void* arg;
+        memcpy(&arg, &c, sizeof(c));
+        ready_->emplace_back(
+                +[](void* p) noexcept { (*reinterpret_cast<Callable*>(&p))(); },
+                arg);
     }
 
     /// Runs executor loop.
@@ -203,8 +219,7 @@ class Executor {
                    current()->eventLoopID_ == eventLoopID_) {
             // Schedule the current executor to run our callbacks
             scheduled_ = current();
-            scheduled_->runSoon(
-                    +[](Executor* ex) noexcept { ex->runOnce(); }, this);
+            scheduled_->runSoon([this]() noexcept { runOnce(); });
         } else {
             // No current executor, or it's for a different event loop:
             // run our callbacks immediately
@@ -339,8 +354,8 @@ class Executor {
                              detail::TaskTreeCollector&) noexcept = nullptr;
 
     CORRAL_NO_UNIQUE_ADDR
-            CORRAL_UNUSED_MEMBER decltype(CORRAL_ENTER_ASYNC_UNIVERSE)
-                    universeGuard_ = CORRAL_ENTER_ASYNC_UNIVERSE;
+    CORRAL_UNUSED_MEMBER decltype(CORRAL_ENTER_ASYNC_UNIVERSE) universeGuard_ =
+            CORRAL_ENTER_ASYNC_UNIVERSE;
 };
 
 namespace detail {

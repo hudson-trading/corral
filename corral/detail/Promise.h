@@ -269,16 +269,13 @@ class BasePromise : private TaskFrame, public IntrusiveListItem<BasePromise> {
         // Prevent further doResume()s from scheduling the task again
         onResume<&BasePromise::doNothing>();
 
-        executor_->runSoon(
-                +[](void* arg) noexcept {
-                    auto h = CoroutineHandle<BasePromise>::from_address(arg);
-                    BasePromise& self = h.promise();
-                    CORRAL_TRACE("pr %p resumed", &self);
-                    self.state_ = State::Running;
-                    auto guard = self.executor_->markActive(self.proxyHandle());
-                    h.resume();
-                },
-                realHandle().address());
+        executor_->runSoon([h = realHandle()]() noexcept {
+            BasePromise& self = h.promise();
+            CORRAL_TRACE("pr %p resumed", &self);
+            self.state_ = State::Running;
+            auto guard = self.executor_->markActive(self.proxyHandle());
+            h.resume();
+        });
     }
 
     /// Called when this task's awaitee completes after its cancellation was
