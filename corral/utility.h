@@ -193,6 +193,7 @@ struct AnnotateMaker {
 };
 static constexpr const AnnotateMaker annotate;
 
+
 /// A helper macro useful in nursery bodies.
 /// Clang and MSVC currently fail to pay attention to [[noreturn]]
 /// of SuspendForever::await_resume(), so have it followed by an unreachable.

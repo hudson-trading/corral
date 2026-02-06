@@ -47,7 +47,7 @@ class TryBlockBase : public TaskParent<void> {
 struct Ellipsis {};
 
 template <class Try, class Finally, class... Catch>
-class TryBlock final : public TryBlockBase, public NurseryScopeBase {
+class TryBlock final : public TryBlockBase, public YieldsLikeAwaitTag {
     enum class Stage { TRY, CATCH, FINALLY };
 
   public:
@@ -284,7 +284,7 @@ template <class Try, class... Catch> class TryBlockBuilder {
 /// syntax.
 class TryBlockMacroFactory {
     template <class Try, class... Catch>
-    class Builder : public NurseryScopeBase {
+    class Builder : public YieldsLikeAwaitTag {
         Try try_;
         std::tuple<Catch...> catch_;
 

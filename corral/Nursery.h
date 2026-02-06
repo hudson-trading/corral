@@ -183,7 +183,8 @@ class BasicNursery
 #define CORRAL_WITH_BASIC_NURSERY(PolicyT, argname)                            \
     co_yield ::corral::BasicNursery<PolicyT>::Factory{} %                      \
             [&](::corral::BasicNursery<PolicyT> & argname)                     \
-            -> ::corral::Task<::corral::detail::NurseryBodyRetval<PolicyT>>
+                    ->::corral::Task<                                          \
+                            ::corral::detail::NurseryBodyRetval<PolicyT>>
 
     ~BasicNursery()
         requires ApplicableErrorPolicy<PolicyT, TaskReturnType>
@@ -379,16 +380,14 @@ using UnsafeNursery = BasicUnsafeNursery<detail::DefaultErrorPolicy>;
 /// to that T value. `TaskStarted<>` or `TaskStarted<void>` must be
 /// called with no arguments.
 template <class Ret> class TaskStarted {
-    using ResultType = Ret;
-
     explicit TaskStarted(detail::TaskStartedSink<Ret>* parent)
       : parent_(parent) {}
 
-    template <class Policy> friend class BasicNursery;
-    template <class, class, class, class...>
-    friend class detail::NurseryStartAwaiter;
+    friend detail::TaskStartedSink<Ret>;
 
   public:
+    using ResultType = Ret;
+
     TaskStarted() = default;
 
     TaskStarted(TaskStarted&& rhs)
@@ -456,6 +455,9 @@ namespace detail {
 template <class Ret> class TaskStartedSink : private Noncopyable {
     friend TaskStarted<Ret>;
     virtual void markStarted(detail::InhabitedType<Ret>) = 0;
+
+  protected:
+    TaskStarted<Ret> make() noexcept { return TaskStarted<Ret>(this); }
 };
 
 template <class Policy, class Ret, class Callable, class... Args>
@@ -487,9 +489,9 @@ class NurseryStartAwaiter
         CORRAL_TRACE("    ...Nursery::start() %p", this);
         detail::PromisePtr<TaskReturnType> promise{std::apply(
                 [this](auto&&... args) {
-                    return nursery_->makePromise(std::move(callable_),
-                                                 std::move(args)...,
-                                                 TaskStarted<Ret>{this});
+                    return nursery_->makePromise(
+                            std::move(callable_), std::move(args)...,
+                            NurseryStartAwaiter::TaskStartedSink::make());
                 },
                 std::move(args_))};
 
@@ -624,7 +626,7 @@ class NurseryStartAwaiter
                         [this](auto&&... args) {
                             nursery_->start(std::move(callable_),
                                             std::move(args)...,
-                                            TaskStarted<Ret>(nullptr));
+                                            TaskStarted<Ret>());
                         },
                         std::move(args_));
             }
@@ -1129,7 +1131,7 @@ BasicUnsafeNursery<Policy>::join() {
 template <class Policy>
 template <class Callable>
 class BasicNursery<Policy>::Scope
-  : public detail::NurseryScopeBase,
+  : public detail::YieldsLikeAwaitTag,
     public detail::NurseryParentAwaiter<Scope<Callable>, Policy>,
     private detail::TaskParent<detail::NurseryBodyRetval<Policy>> {
     class Impl : public BasicNursery<Policy> {

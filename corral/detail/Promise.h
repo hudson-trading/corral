@@ -42,7 +42,7 @@ namespace corral::detail {
 
 class BasePromise;
 template <class T> class Promise;
-class NurseryScopeBase {};
+class YieldsLikeAwaitTag {};
 class RethrowCurrentException;
 template <class T> class CoTry;
 
@@ -487,7 +487,7 @@ class Promise : public BasePromise, public ReturnValueMixin<T> {
     /// `CORRAL_WITH_NURSERY(n) { ... }` syntax to work, by making it expand
     /// to a binary operator which binds more tightly than `co_yield`.
     /// (`co_await` binds too tightly.)
-    template <std::derived_from<NurseryScopeBase> U> auto yield_value(U&& u) {
+    template <std::derived_from<YieldsLikeAwaitTag> U> auto yield_value(U&& u) {
         return await_transform(std::forward<U>(u));
     }
 

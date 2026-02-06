@@ -26,6 +26,7 @@
 #pragma once
 
 #include "detail/Sequence.h"
+#include "detail/With.h"
 #include "detail/exception.h"
 #include "detail/wait.h"
 #include "utility.h"
@@ -168,11 +169,11 @@ auto try_(TryBlock&& tryBlock) {
 ///         co_await thing.destroy();
 ///     }; // <-- the semicolon is required here
 #define CORRAL_TRY                                                             \
-    co_yield ::corral::detail::TryBlockMacroFactory{} % [&]()                  \
-            -> ::corral::Task<void>
-#define CORRAL_FINALLY % [&]() -> ::corral::Task<void>
+    co_yield ::corral::detail::TryBlockMacroFactory{} % [&]()->::corral::Task< \
+                                                                void>
+#define CORRAL_FINALLY % [&]()->::corral::Task<void>
 #if __cpp_exceptions
-#define CORRAL_CATCH(arg) / [&](arg) -> ::corral::Task<void>
+#define CORRAL_CATCH(arg) / [&](arg)->::corral::Task<void>
 
 /// As catch_() takes an asynchronous lambda, it will be executed outside
 /// of a normal C++ catch-block (as catch-blocks are not allowed to suspend),
@@ -231,5 +232,70 @@ using Ellipsis = detail::Ellipsis;
 template <class ThenFn> auto then(ThenFn&& thenFn) {
     return detail::SequenceBuilder<ThenFn>(std::forward<ThenFn>(thenFn));
 }
+
+
+/// A combinator which runs one awaitable in context of running another.
+/// (to some degree, an equivalent of python's `async with` statement).
+///
+/// More specifically:
+///    - `first()` is started with a relevant `TaskStarted<T>` argument;
+///    - Once first signals readiness (through invoking its `TaskStarted<T>`
+///      argument), `then()` is invoked (passing the result from TaskStarted);
+///    - When `then()` completes, `first()` is cancelled;
+///    - If cancelled externally, `then()` is cancelled first; after
+///      it completes, `first()` is cancelled;
+///    - The result of the whole operation is the result of `then()`.
+///
+/// `first()` should never complete on its own, unless hitting an error.
+///
+/// This is useful for active objects, whose usability depends on having
+/// a background coroutine:
+///
+///    struct MyObject {
+///        auto run() {
+///            return [this](TaskStarted<int> started) -> Task<> {
+///                // ...async initialization...
+///                started(42);
+///                co_await anyOf([&]() -> Task<> {
+///                    for (;;) { /* async bookkeeping, if needed */ }
+///                }, untilCancelledAnd([&]() -> Task<> {
+///                    // ...asynchronous cleanup...
+///                }));
+///            };
+///        }
+///    };
+///
+///    Task<> func() {
+///        MyObject obj;
+///        co_await with(obj.run(), [&](int v) -> Task<> {
+///            assert(v == 42);
+///            CORRAL_TRY {
+///                // use obj
+///            } CORRAL_FINALLY {
+///                // obj still usable, run() cancellation did not commence yet
+///            };
+///        });
+///    }
+///
+/// with() may take an optional template argument specifying the error policy
+/// (see ErrorPolicy.h for details).
+template <class Policy = detail::Unspecified, class FirstFn, class ThenFn>
+    requires(std::invocable<FirstFn, detail::TaskStartedTag> &&
+             Awaitable<std::invoke_result_t<FirstFn, detail::TaskStartedTag>> &&
+             Awaitable<typename detail::ChainableForWith<FirstFn,
+                                                         ThenFn>::ResultType>)
+auto with(FirstFn&& first, ThenFn&& then) {
+    return makeAwaitable<detail::With<Policy, FirstFn, ThenFn>, FirstFn,
+                         ThenFn>(std::forward<FirstFn>(first),
+                                 std::forward<ThenFn>(then));
+}
+
+/// An alternative syntax for `with()`:
+///     CORRAL_WITH(obj.run(), int v) {
+///         // same as above
+///     };
+#define CORRAL_WITH(first, ...)                                                \
+    co_yield ::corral::detail::WithBuilder(first) % [&](__VA_ARGS__)           \
+                                                            ->::corral::Task<>
 
 } // namespace corral

@@ -873,6 +873,169 @@ CORRAL_TEST_CASE("seq-qualifications") {
 
 
 //
+// With
+//
+
+CORRAL_TEST_CASE("with-smoke") {
+    StageChecker stage;
+    int x = co_await with(
+            [&](TaskStarted<int> started) -> Task<> {
+                stage.require(0);
+                co_await t.sleep(1ms);
+                stage.require(1);
+                started(42);
+                co_await untilCancelledAnd([&]() -> Task<> {
+                    stage.require(3);
+                    co_await t.sleep(1ms);
+                });
+            },
+            [&](int v) -> Task<int> {
+                stage.require(2);
+                CATCH_CHECK(v == 42);
+                co_await t.sleep(1ms);
+                co_return 43;
+            });
+
+    CATCH_CHECK(x == 43);
+    stage.require(4);
+    CATCH_CHECK(t.now() == 3ms);
+}
+
+// If a with-scope is cancelled, cancellation of the body happens first.
+CORRAL_TEST_CASE("with-smoke-cancel") {
+    StageChecker stage;
+    CORRAL_WITH_NURSERY(n) {
+        auto bg = [&](TaskStarted<> started) -> Task<> {
+            stage.require(0);
+            co_await t.sleep(1ms);
+            stage.require(1);
+            started();
+            co_await untilCancelledAnd([&]() -> Task<> {
+                stage.require(5);
+                co_await t.sleep(1ms);
+            });
+        };
+        CORRAL_WITH(bg) {
+            CORRAL_TRY {
+                stage.require(2);
+                co_await t.sleep(1ms);
+                n.cancel();
+                co_await yield;
+                CATCH_CHECK(!"should not be reached");
+            }
+            CORRAL_FINALLY {
+                stage.require(3);
+                co_await t.sleep(1ms);
+                stage.require(4);
+            };
+        };
+
+        CORRAL_ASSERT_UNREACHABLE();
+    };
+    stage.require(6);
+    CATCH_CHECK(t.now() == 4ms);
+}
+
+// The first stage signals readiness immediately, before await_suspend() of the
+// whole thing.
+CORRAL_TEST_CASE("with-imm-ready") {
+    StageChecker stage;
+    co_await with(
+            [&](TaskStarted<> started) {
+                stage.require(0);
+                started();
+                return SuspendForever{};
+            },
+            [&]() -> Task<> {
+                stage.require(1);
+                co_await t.sleep(1ms);
+            });
+    stage.require(2);
+}
+
+// Same as above, but the second stage is also immediately ready.
+CORRAL_TEST_CASE("with-both-imm-ready") {
+    StageChecker stage;
+    co_await with(
+            [&](TaskStarted<> started) {
+                stage.require(0);
+                started();
+                return SuspendForever{};
+            },
+            [&]() -> Task<> {
+                stage.require(1);
+                return noop();
+            });
+    stage.require(2);
+}
+
+// If with() executes pending cancellation, pending cancellation state
+// propagates to the first stage, and the second stage never gets executed.
+CORRAL_TEST_CASE("with-pending-cancel") {
+    StageChecker stage;
+    co_await anyOf(t.sleep(1ms),
+                   with(
+                           [&](TaskStarted<> started) -> Task<> {
+                               stage.require(0);
+                               co_await noncancellable(t.sleep(2ms));
+                               stage.require(1);
+                               started();
+                               co_await suspendForever;
+                           },
+                           [&]() -> Task<> {
+                               CATCH_CHECK(!"should not be reached");
+                               return noop();
+                           }));
+    stage.require(2);
+}
+
+// If both arguments to with() are immediately-cancellable,
+// so is with().
+CORRAL_TEST_CASE("with-immediate-cancel") {
+    co_await anyOf(t.sleep(1ms), [&]() -> Task<> {
+        co_await noncancellable(t.sleep(2ms));
+        co_await with(
+                [&](TaskStarted<>) {
+                    return t.sleep(1ms) | then([&]() -> Task<> {
+                               CATCH_CHECK(!"should not be reached");
+                               return noop();
+                           });
+                },
+                [&]() {
+                    CATCH_CHECK(!"should not be reached");
+                    return t.sleep(1ms);
+                });
+    });
+    CATCH_CHECK(t.now() == 2ms);
+}
+
+// A weird use case: readiness is signalled synchronously during first stage's
+// cancellation (before await_cancel() returns).
+CORRAL_TEST_CASE("with-ready-on-cancel") {
+    StageChecker stage;
+    co_await anyOf(
+            t.sleep(1ms),
+            with(
+                    [&](TaskStarted<> started) {
+                        stage.require(0);
+                        return untilCancelledAnd(
+                                noop() |
+                                then([&stage,
+                                      started = std::move(started)]() mutable {
+                                    stage.require(1);
+                                    started();
+                                    return noop();
+                                }));
+                    },
+                    [&]() -> Task<> {
+                        CATCH_CHECK(!"should not be reached");
+                        return noop();
+                    }));
+    stage.require(2);
+}
+
+
+//
 // Miscellanea
 //
 

@@ -429,6 +429,19 @@ in order to teach corral how to interact with it.
   If the callable accepts the result by reference, its lifetime will be extended
   until the second awaitable completes.
 
+* `Awaitable auto with(std::invocable<TaskStarted<T>> auto bg, std::invocable<T> auto work)`
+  : Runs `work` in context of running `background`.
+  First `background` is started; after it signals readiness (by invoking its
+  `TaskStarted<>` argument), `work` is started concurrently. After `work` completes,
+  `background` is cancelled, and the result of `work` becomes the result of the whole
+  `with()` block.
+  Upon cancellation, `work` is cancelled first; `background` is only cancelled
+  after `work` completes.
+  If cancelled before `TaskStarted<>` invocation, `background` gets cancelled
+  right away, and `work` never gets executed.
+  `background` should never complete normally, unless it returns an error.
+
+
 ## Synchronization primitives
 
 ### Event

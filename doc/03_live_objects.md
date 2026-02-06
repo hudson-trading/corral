@@ -206,3 +206,76 @@ class MyParentLiveClass {
 
 This results in an established hierarchy of tasks that resembles
 the hierarchy of the live objects in the program.
+
+
+## Asynchronous contexts
+
+The approach described above has one peculiarity: upon cancellation,
+all tasks in the task tree -- including `openNursery()`, any tasks
+submitted to the nursery, and the user code -- will receive the cancellation
+request simultaneously, and each will process such a request at its own
+pace. This may backfire if certain tasks, when cancelling, still use
+functionality provided by `run()` and assume its availability.
+
+For example, a member function like this:
+
+```cpp
+corral::Task<void> MyObject::foo() {
+    // assume run() runs in background, and nursery_ available
+    CORRAL_TRY { /*...*/ }
+    CORRAL_FINALLY {
+        co_await sleep(500_ms);
+        nursery_->start(...);
+    };
+}
+```
+
+— is likely to trigger a use-after-free, if `openNursery()` processes
+the cancellation first and closes the nursery.
+
+Accounting for such use cases require processing cancellation sequentially:
+first cancel the user code (which may be using the object), and after
+it completes, proceed with cancelling `run()`. Nurseries do not offer
+such a functionality, so setting this up requires somewhat creative employment
+of nested nurseries, `noncancellable()`, scope guards, and events to propagate
+cancellation.
+
+To accommodate for this, corral offers another combiner, `with()`. It takes
+two callable objects (which should return awaitables), starts the first task,
+and after it signals readiness (through invocation of passed in `TaskStarted<>`),
+starts the other one concurrently. When completed (or when cancelling), it makes
+sure the latter task fully completes (and is destroyed, along with any held local
+variables or scope guards) before proceeding with the cancellation of the first
+("enclosing") task, thus making sure any functionality it may provide remains
+available to the inner task as long as it runs.
+
+This example may therefore be rewritten as:
+
+```cpp
+auto MyObject::run() {
+    return [this](corral::TaskStarted<> started) -> corral::Task<void> {
+        CORRAL_WITH_NURSERY(n) {
+            co_await n.start(corral::openNursery, std::ref(nursery_));
+            started(); // signal readiness
+            co_return async::join;
+        };
+    };
+}
+
+corral::Task<void> someUserCode() {
+    MyObject obj;
+    co_await corral::with(obj.run(), [&]() -> corral::Task<> {
+        co_await obj.foo();
+    });
+
+    // or use alternative, shorter syntax:
+    CORRAL_WITH(obj.run()) {
+        co_await obj.foo();
+    };
+}
+```
+
+The enclosing tasks (`run()` in the above example) should normally run
+until cancelled. It may end by an error (in which case the error
+is propagated out of `with()` block), but successful completion
+will trigger an assert.
