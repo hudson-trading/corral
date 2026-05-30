@@ -37,6 +37,11 @@ template <class Self> class ParkingLotImpl {
     ParkingLotImpl() = default;
     ParkingLotImpl(ParkingLotImpl&&) = delete;
     ParkingLotImpl& operator=(ParkingLotImpl&&) = delete;
+    ~ParkingLotImpl() {
+        CORRAL_ASSERT(
+                parked_.empty() &&
+                "Still some tasks suspended while destroying a parking lot");
+    }
 
   protected:
     class Parked : public IntrusiveListItem<Parked> {
