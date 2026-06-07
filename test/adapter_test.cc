@@ -190,6 +190,12 @@ CORRAL_TEST_CASE("shared") {
         co_await t.sleep(5ms);
         co_return 42;
     });
+    decltype(shared) empty;
+
+    CATCH_CHECK(shared);
+    CATCH_CHECK(shared.get() != nullptr);
+    CATCH_CHECK(!empty);
+    CATCH_CHECK(empty.get() == nullptr);
 
     auto use = [&](milliseconds delay = 0ms) -> Task<int> {
         if (delay != 0ms) {
