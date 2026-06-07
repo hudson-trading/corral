@@ -78,7 +78,7 @@ template <class Awaitable> class Shared {
     Shared(std::in_place_t, Args&&... args);
 
     Awaitable* get() const;
-    explicit operator bool() const { return !state_; }
+    explicit operator bool() const { return static_cast<bool>(state_); }
     Awaitable& operator*() const { return *get(); }
     Awaitable* operator->() const { return get(); }
 
