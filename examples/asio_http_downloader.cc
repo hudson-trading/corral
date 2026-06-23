@@ -40,7 +40,7 @@ namespace http = beast::http;
 /// An example function which downloads a file over HTTP using multiple
 /// concurrent conections.
 corral::Task<void> http_download(
-        asio::io_service& io_service,
+        asio::io_context& io_context,
         std::string url,
         std::ofstream& out,
         std::variant<int /*concurrency*/,
@@ -58,7 +58,7 @@ corral::Task<void> http_download(
     std::string path = url.substr(slash);
 
     // Resolve and connect
-    tcp::resolver resolver(io_service);
+    tcp::resolver resolver(io_context);
     auto endpoints = co_await resolver.async_resolve(
             tcp::resolver::query{host, "http"}, corral::asio_awaitable);
     tcp::socket sock(io_service);
@@ -98,7 +98,7 @@ corral::Task<void> http_download(
             for (size_t bound = chunkSize; bound < totalSize;
                  bound += chunkSize) {
                 nursery.start(
-                        http_download, std::ref(io_service), url, std::ref(out),
+                        http_download, std::ref(io_context), url, std::ref(out),
                         std::make_pair(bound,
                                        std::min(chunkSize, totalSize - bound)));
                 ofs = bound;

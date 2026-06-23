@@ -40,7 +40,7 @@ using tcp = boost::asio::ip::tcp;
 /// fails, or after `delay` milliseconds since it started, whichever comes
 /// first.
 corral::Task<std::optional<tcp::socket>> happy_eyeballs_connect(
-        boost::asio::io_service& io_service,
+        boost::asio::io_context& io_context,
         std::ranges::range auto endpoints,
         boost::posix_time::milliseconds delay) {
     std::optional<tcp::socket> result;
@@ -62,7 +62,7 @@ corral::Task<std::optional<tcp::socket>> happy_eyeballs_connect(
             // Start the connection attempt in background
             // (as we don't want it cancelled after `delay`).
             nursery.start([&, addr, kickOffNext]() -> corral::Task<void> {
-                tcp::socket sock(io_service);
+                tcp::socket sock(io_context);
                 std::cout << "trying " << addr << "...\n";
                 auto ec = co_await sock.async_connect(
                         addr, corral::asio_nothrow_awaitable);
@@ -85,7 +85,7 @@ corral::Task<std::optional<tcp::socket>> happy_eyeballs_connect(
             // As kickOffNext() is idempotent, we can do it unconditionally
             // upon timeout expiration, not caring about whether the lambda
             // above has already done so.
-            co_await corral::sleepFor(io_service, delay);
+            co_await corral::sleepFor(io_context, delay);
             kickOffNext();
         };
 
@@ -105,14 +105,14 @@ int main(int argc, char** argv) {
         throw std::runtime_error(
                 "usage: asio_happy_eyeballs <host> <port> <delay_ms>");
     }
-    boost::asio::io_service io_service(1);
-    tcp::resolver resolver(io_service);
+    boost::asio::io_context io_context(1);
+    tcp::resolver resolver(io_context);
     auto endpoints = corral::run(
             io_service,
             resolver.async_resolve(tcp::resolver::query{argv[1], argv[2]},
                                    corral::asio_awaitable));
     auto delay = boost::posix_time::milliseconds(std::stoi(argv[3]));
     auto sock = corral::run(
-            io_service, happy_eyeballs_connect(io_service, endpoints, delay));
+            io_context, happy_eyeballs_connect(io_context, endpoints, delay));
     return sock ? 0 : 1;
 }
