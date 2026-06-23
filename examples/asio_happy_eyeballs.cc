@@ -108,8 +108,8 @@ int main(int argc, char** argv) {
     boost::asio::io_context io_context(1);
     tcp::resolver resolver(io_context);
     auto endpoints = corral::run(
-            io_service,
-            resolver.async_resolve(tcp::resolver::query{argv[1], argv[2]},
+            io_context,
+            resolver.async_resolve(argv[1], argv[2],
                                    corral::asio_awaitable));
     auto delay = boost::posix_time::milliseconds(std::stoi(argv[3]));
     auto sock = corral::run(

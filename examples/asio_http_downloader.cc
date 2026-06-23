@@ -60,8 +60,8 @@ corral::Task<void> http_download(
     // Resolve and connect
     tcp::resolver resolver(io_context);
     auto endpoints = co_await resolver.async_resolve(
-            tcp::resolver::query{host, "http"}, corral::asio_awaitable);
-    tcp::socket sock(io_service);
+            host, "http", corral::asio_awaitable);
+    tcp::socket sock(io_context);
     co_await asio::async_connect(sock, endpoints, corral::asio_awaitable);
 
     // Make and send HTTP request
