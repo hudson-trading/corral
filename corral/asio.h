@@ -64,15 +64,12 @@ struct BoostAsioImpl {
 };
 } // namespace corral::detail
 
-namespace boost::asio {
 template <bool ThrowOnError, class X, class... Ret>
-class async_result<::corral::detail::asio_awaitable_t<ThrowOnError>,
-                   X(boost::system::error_code, Ret...)>
+class boost::asio::async_result<::corral::detail::asio_awaitable_t<ThrowOnError>,
+                                X(boost::system::error_code, Ret...)>
   : public ::corral::detail::AsyncResultImpl<::corral::detail::BoostAsioImpl,
                                              ThrowOnError,
                                              Ret...> {};
-} // namespace boost::asio
-
 namespace corral {
 
 template <>
