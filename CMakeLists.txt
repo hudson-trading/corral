@@ -117,7 +117,7 @@ if(NOT ${SKIP_TESTS})
     endif()
 
     add_executable(corral_asio_test test/asio_test.cc test/config.h test/config.h)
-    target_link_libraries(corral_asio_test PRIVATE corral Catch2::Catch2)
+    target_link_libraries(corral_asio_test PRIVATE corral Catch2::Catch2 ${CORRAL_BOOST_ASIO_LIB_NAME})
 
     if("${CORRAL_TEST_RUNNER}" STREQUAL "")
       message(STATUS "Trying to use installed OpenSSL.")
