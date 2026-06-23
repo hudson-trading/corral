@@ -58,7 +58,7 @@ concept Awaiter = requires(T t, const T ct, Handle h) {
 #if !defined(__GNUC__) || defined(__llvm__) || __GNUC__ >= 11
   // gcc-10.2 fails to process the below
   && (std::is_same_v<Ret, detail::Unspecified> || requires(T t) {
-    { std::forward<T>(t).await_resume() } -> std::convertible_to<Ret>;
+    { std::forward<T>(t).await_resume() } -> detail::std_convertible_to<Ret>;
 })
 #endif
 ;

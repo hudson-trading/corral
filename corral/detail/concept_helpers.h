@@ -32,9 +32,37 @@ namespace corral::detail {
 
 struct Unspecified {};
 
+/// Work around libc++ bug <https://github.com/llvm/llvm-project/issues/48959>,
+/// which causes std::is_convertible_v<void, std::optional<int>> (or any other
+/// optional type) to fail to compile, instead of just having that by false.
+/// This reimplements the type trait and concept, and forwards it to the
+/// standard library if From is not void, but simple returns false if it is.
+/// Use template matching instead of std::conditional or similar to ensure
+/// that std::is_convertible_v is never instantiated with From = void.
+template <class From, class To>
+struct std_is_convertible {
+    static constexpr const bool value = std::is_convertible_v<From, To>;
+};
+
+template <class To>
+struct std_is_convertible<void, To> : std::false_type {};
+
+template <>
+struct std_is_convertible<void, void> : std::true_type {};
+
+template <class From, class To>
+constexpr bool std_is_convertible_v = std_is_convertible<From, To>::value;
+
+template <class From, class To>
+concept std_convertible_to =
+        std_is_convertible_v<From, To> &&
+        requires {
+            static_cast<To>(std::declval<From>());
+        };
+
 template <class From, class To>
 concept convertible_to =
-        std::same_as<From, To> || std::convertible_to<From, To>;
+        std::same_as<From, To> || std_convertible_to<From, To>;
 
 template <class From, class... To>
 concept convertible_to_any = (convertible_to<From, To> || ...);

@@ -98,7 +98,7 @@ concept ApplicableErrorPolicy = requires {
     /// Extracts the error from the wrapped object.
     /// Should work on objects holding either an error or a value,
     /// and produce a default-constructed error type in the latter case.
-    { P::unwrapError(cw) } -> std::convertible_to<typename P::ErrorType>;
+    { P::unwrapError(cw) } -> detail::std_convertible_to<typename P::ErrorType>;
 
     /// Extracts the value from the wrapped object.
     /// Will only be called on wrapped objects holding a value.
@@ -132,7 +132,7 @@ concept ApplicableErrorPolicy = requires {
             P::template wrapValue<
                 decltype(P::template unwrapValue<Wrapped>(std::forward<Wrapped>(w)))
             >(P::template unwrapValue<Wrapped>(std::forward<Wrapped>(w)))
-        } -> std::convertible_to<Wrapped>;
+        } -> detail::std_convertible_to<Wrapped>;
 
     }) || (std::is_same_v<decltype(P::unwrapValue(std::declval<Wrapped>())), void> && requires {
         /// For void values, `wrapValue()` should return a wrapped object
