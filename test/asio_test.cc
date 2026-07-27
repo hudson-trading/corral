@@ -40,6 +40,7 @@
 #include <asio.hpp>
 
 #include "../corral/asio-standalone.h"
+#include "../corral/asio-standalone.h"
 #define CORRAL_ASIOS                                                           \
     corral::detail::BoostAsioImpl, corral::detail::StandaloneAsioImpl
 #else

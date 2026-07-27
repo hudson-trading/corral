@@ -23,6 +23,8 @@
 //
 // SPDX-License-Identifier: MIT
 
+#pragma once
+
 #include <asio.hpp>
 #include <asio/version.hpp>
 #include <system_error>
