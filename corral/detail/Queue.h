@@ -203,7 +203,8 @@ class Queue {
     }
 
     static auto moveRange(auto it, auto ie, auto dst) {
-        if constexpr (std::is_nothrow_move_constructible_v<T>) {
+        if constexpr (std::is_nothrow_move_constructible_v<T> ||
+                      !std::is_copy_constructible_v<T>) {
             return std::uninitialized_move(it, ie, dst);
         } else {
             return std::uninitialized_copy(it, ie, dst);
