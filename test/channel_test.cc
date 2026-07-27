@@ -209,6 +209,32 @@ CORRAL_TEST_CASE("bounded-channel-close") {
 // Unbounded channels
 //
 
+struct ThrowingMoveOnly {
+    explicit ThrowingMoveOnly(int value) : value(value) {}
+
+    ThrowingMoveOnly(const ThrowingMoveOnly&) = delete;
+    ThrowingMoveOnly(ThrowingMoveOnly&& other) noexcept(false)
+      : value(other.value) {}
+
+    int value;
+};
+
+CORRAL_TEST_CASE("unbounded-channel-throwing-move-only") {
+    Channel<ThrowingMoveOnly> channel;
+
+    for (int i = 0; i < 20; ++i) {
+        CATCH_REQUIRE(channel.trySend(ThrowingMoveOnly(i)));
+    }
+
+    for (int i = 0; i < 20; ++i) {
+        auto value = channel.tryReceive();
+        CATCH_REQUIRE(value.has_value());
+        CATCH_CHECK(value->value == i);
+    }
+
+    co_return;
+}
+
 CORRAL_TEST_CASE("unbounded-channel-smoke") {
     Channel<int> channel;
 
