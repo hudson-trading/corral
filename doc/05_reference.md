@@ -1057,6 +1057,7 @@ class Executor {
     void runSoon(std::invocable auto fn);
     void drain();
     void capture(std::invocable<> auto&& fn);
+    size_t pending() const noexcept;
 };
 Awaitable<Executor*> auto getExecutor();
 ```
@@ -1083,6 +1084,13 @@ Once you have the executor, you can use it as follows:
   The passed in lambda can have up to one pointer worth of context, and must
   be trivially copyable and destructible (typically it would capture one variable
   by reference).
+
+* `size_t Executor::pending() const noexcept`
+  : Number of callbacks waiting to run on this executor, not including
+  the one currently executing (if any). Zero means the executor is idle
+  and the event loop can check I/O. Intended for watchdogs: a persistently
+  high value means ready tasks are starving I/O. Available from a task
+  via `getExecutor()`, or from non-async context via `currentRunExecutor()`.
 
 * `void Executor::drain()`
   : Immediately execute everything that has been scheduled so far. Unlike

@@ -363,5 +363,30 @@ CORRAL_TEST_CASE("multiverse") {
     CATCH_CHECK(t2.now() == 3ms);
 }
 
+CORRAL_TEST_CASE("executor-pending") {
+    Executor* ex = co_await getExecutor();
+    CATCH_CHECK(ex->pending() == 0);
+    CATCH_CHECK(currentRunExecutor() == ex);
+    CATCH_CHECK(currentRunExecutor()->pending() == 0);
+
+    ex->schedule([]() noexcept {});
+    ex->schedule([]() noexcept {});
+    CATCH_CHECK(ex->pending() == 2);
+
+    Event a, b;
+    CORRAL_WITH_NURSERY(n) {
+        n.start([&]() -> Task<> { co_await a; });
+        n.start([&]() -> Task<> { co_await b; });
+        co_await yield;
+
+        size_t before = ex->pending();
+        a.trigger();
+        b.trigger();
+        CATCH_CHECK(ex->pending() == before + 2);
+
+        co_return join;
+    };
+}
+
 
 } // namespace

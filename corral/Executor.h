@@ -187,6 +187,16 @@ class Executor {
     /// This function is reenterant.
     void drain() { drain(*ready_); }
 
+    /// Number of callbacks waiting to run on this executor, not including
+    /// the one currently executing (if any). Zero means the executor is
+    /// idle and the event loop can check I/O.
+    ///
+    /// Safe to call from a task (`co_await getExecutor()`) or from
+    /// outside async context (`currentRunExecutor()`), e.g. a timer
+    /// or signal handler. A persistently high value means ready tasks
+    /// are starving I/O.
+    size_t pending() const noexcept { return ready_->size(); }
+
     /// Arranges `c()` to be called on the next executor loop,
     /// but does *not* run the executor loop.
     ///
@@ -211,7 +221,8 @@ class Executor {
     /// NB: this will continue running executor until its run queue empties,
     ///     and only then would return so I/O checks can be made.
     ///     Pay attention not to starve your program with a steady flow
-    ///     of ready tasks.
+    ///     of ready tasks. `pending()` reports how many such tasks are
+    ///     currently queued.
     void runSoon() noexcept {
         if (running_ != nullptr || scheduled_ != nullptr) {
             // Do nothing; our callbacks are already slated to run soon
