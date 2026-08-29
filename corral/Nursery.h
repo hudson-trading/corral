@@ -267,8 +267,9 @@ using Nursery = BasicNursery<detail::DefaultErrorPolicy>;
 /// (hence "unsafe"). It will attempt to cancel() anything still alive from its
 /// destructor, which will do the job if all tasks spawned are known to support
 /// synchronous cancellation. Otherwise, you will get an assertion failure
-/// (or other behavior as provided by any custom CORRAL_FAIL_FOR_DANGLING_TASKS
-/// macro that you've provided; see config.h).
+/// that dumps the remaining task tree to stderr (or other behavior as provided
+/// by any custom CORRAL_FAIL_FOR_DANGLING_TASKS macro that you've provided;
+/// see config.h).
 ///
 /// It is possible to "adopt" an UnsafeNursery by awaiting its join() method.
 /// This basically turns it into a regular nursery with the task

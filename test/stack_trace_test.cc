@@ -80,6 +80,39 @@ CORRAL_TEST_CASE("task-tree") {
                                  {3, "a sibling task"},
                                  {4, "<TASK>"},
                                  {5, "Sleep"}});
+
+    std::string rendered;
+    for (auto& elem : tree) {
+        writeTreeDumpElement(elem, [&](const char* s) { rendered += s; });
+    }
+    CATCH_CHECK(rendered.find("Nursery\n") != std::string::npos);
+    CATCH_CHECK(rendered.find("this should be sleeping\n") !=
+                std::string::npos);
+    CATCH_CHECK(rendered.find("a sibling task\n") != std::string::npos);
+    CATCH_CHECK(rendered.find("Sleep\n") != std::string::npos);
+    CATCH_CHECK(rendered.find("<YOU ARE HERE>\n") != std::string::npos);
+    CATCH_CHECK(rendered.find("this should complete") == std::string::npos);
+    CATCH_CHECK(rendered.find("Task 0x") != std::string::npos);
+
+    // Depth is two spaces per level: the nested Sleep is under
+    // "this should be sleeping" at depth 6.
+    CATCH_CHECK(rendered.find("            Sleep\n") != std::string::npos);
+}
+
+CORRAL_TEST_CASE("format-task-tree") {
+    std::string rendered;
+    CORRAL_WITH_NURSERY(n) {
+        n.start(annotate, "still running",
+                [&]() -> Task<> { co_await t.sleep(5ms); });
+        co_await t.sleep(1ms);
+        Executor* ex = co_await getExecutor();
+        formatTaskTree(*ex, [&](const char* s) { rendered += s; });
+        co_return join;
+    };
+
+    CATCH_CHECK(rendered.find("Nursery\n") != std::string::npos);
+    CATCH_CHECK(rendered.find("still running\n") != std::string::npos);
+    CATCH_CHECK(rendered.find("Sleep\n") != std::string::npos);
 }
 
 using RawStack = std::vector<uintptr_t>;

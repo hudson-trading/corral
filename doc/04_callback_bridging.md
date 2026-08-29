@@ -239,7 +239,9 @@ invariants:
   effort to cancel them; but the `UnsafeNursery` destructor can't yield
   to the event loop, so this will only succeed if everything in the
   nursery is synchronously cancellable. If any tasks remain active after
-  this attempt, you'll get an assertion failure; if you're running
+  this attempt, you'll get an assertion failure that includes a dump of
+  the remaining task tree on stderr (override `CORRAL_FAIL_FOR_DANGLING_TASKS`
+  if you want different behavior; see `corral/config.h`); if you're running
   without assertions enabled, you'll see undefined behavior when the
   tasks eventually complete and try to send their results to a nursery
   that no longer exists.

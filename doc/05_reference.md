@@ -1017,6 +1017,15 @@ struct TreeDumpElement {
 template <std::output_iterator<TreeDumpElement> OutIt>
 Awaitable<OutIt> auto dumpTaskTree(OutIt out);
 
+void writeTreeDumpElement(const TreeDumpElement& node, std::FILE* out);
+template <class Sink>
+void writeTreeDumpElement(const TreeDumpElement& node, Sink&& sink);
+
+template <class Awaitable>
+void writeTaskTree(std::FILE* out, const Awaitable& root);
+template <class Awaitable, class Sink>
+void formatTaskTree(const Awaitable& root, Sink&& sink);
+
 template<Awaitable T>
 Awaitable auto annotate(std::string annotation, T&&);
 ```
@@ -1043,6 +1052,24 @@ Awaitable auto annotate(std::string annotation, T&&);
   `await_introspect()`; or a `std::type_info*` indicating the type
   of an awaitable that does not implement `await_introspect()`.
   `ptr` holds the address of the coroutine frame or the awaitable.
+
+* `void writeTreeDumpElement(const TreeDumpElement& node, std::FILE* out)`
+* `void writeTreeDumpElement(const TreeDumpElement& node, Sink&& sink)`
+  : Format one tree node as a single indented line of text. The `Sink`
+  overload invokes `sink` with NUL-terminated C strings (the pointers
+  are only valid for the duration of that call). Task frames render as
+  `Task 0x...`; named introspect nodes render as their name. Indentation
+  is two spaces per `depth`.
+
+* `void writeTaskTree(std::FILE* out, const Awaitable& root)`
+* `void formatTaskTree(const Awaitable& root, Sink&& sink)`
+  : Walk an awaitable or `Executor` and emit a text rendering of its
+  task tree. `writeTaskTree` writes to a `FILE*` and does not allocate;
+  `formatTaskTree` feeds the same text to `sink`. These are intended
+  for diagnostics, including a custom `CORRAL_FAIL_FOR_DANGLING_TASKS`
+  that throws an exception containing the tree. The default
+  `CORRAL_FAIL_FOR_DANGLING_TASKS` (see `corral/config.h`) writes the
+  tree to stderr and then asserts.
 
 * `Awaitable<T> auto annotate(std::string annotation, Awaitable<T> auto&&)`
   : Allows annotating the awaitable with a custom string to appear
