@@ -373,16 +373,22 @@ CORRAL_TEST_CASE("executor-pending") {
     ex->schedule([]() noexcept {});
     CATCH_CHECK(ex->pending() == 2);
 
+    // sleep (unlike yield on clang) actually suspends, so the executor
+    // can drain the scheduled callbacks before we resume.
+    co_await t.sleep(1ms);
+    CATCH_CHECK(ex->pending() == 0);
+
     Event a, b;
     CORRAL_WITH_NURSERY(n) {
         n.start([&]() -> Task<> { co_await a; });
         n.start([&]() -> Task<> { co_await b; });
-        co_await yield;
+        co_await t.sleep(1ms);
+        CATCH_CHECK(ex->pending() == 0);
 
-        size_t before = ex->pending();
         a.trigger();
+        CATCH_CHECK(ex->pending() == 1);
         b.trigger();
-        CATCH_CHECK(ex->pending() == before + 2);
+        CATCH_CHECK(ex->pending() == 2);
 
         co_return join;
     };
