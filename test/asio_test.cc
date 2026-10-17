@@ -26,6 +26,13 @@
 #define CATCH_CONFIG_MAIN
 #include "config.h"
 
+#include <type_traits>
+
+#include "../corral/ThreadPool.h"
+
+static_assert(!std::is_copy_constructible_v<corral::ThreadPool>);
+static_assert(!std::is_copy_assignable_v<corral::ThreadPool>);
+
 #if __cpp_exceptions
 
 #include <chrono>
@@ -56,7 +63,6 @@
 #include <boost/beast/ssl.hpp>
 #endif
 
-#include "../corral/ThreadPool.h"
 #include "../corral/corral.h"
 #include "helpers.h"
 
