@@ -41,6 +41,7 @@
 #include "DegenerateThreadPool.h"
 #include "concepts.h"
 #include "detail/IntrusivePtr.h"
+#include "detail/utility.h"
 
 #ifndef _WIN32
 #include <signal.h>
@@ -54,7 +55,7 @@ namespace corral {
 /// All public methods of ThreadPool (constructor, destructor, and `run()`)
 /// must be called from the same thread in which the event loop passed to the
 /// constructor is running.
-class ThreadPool {
+class ThreadPool : public detail::Noncopyable {
     class Task;
     template <class F, class... Args> class TaskImpl;
     enum CancelState : uint8_t;
