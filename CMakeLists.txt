@@ -77,6 +77,7 @@ if(NOT ${SKIP_TESTS})
     test/combiner_test.cc
     test/error_policy_test.cc
     test/nursery_test.cc
+    test/queue_test.cc
     test/stack_trace_test.cc
     test/sync_primitive_test.cc
     test/config.h

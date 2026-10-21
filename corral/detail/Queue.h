@@ -135,14 +135,25 @@ class Queue {
             grow(size_ + sz);
         }
 
-        if (tail_ + sz <= buffer_ + capacity_) {
+        if (sz <= static_cast<size_t>(buffer_ + capacity_ - tail_)) {
             // Free space unfragmented
             tail_ = moveRange(begin, end, tail_);
         } else {
             auto bound = begin;
             std::advance(bound, std::distance(tail_, buffer_ + capacity_));
-            moveRange(begin, bound, tail_);
-            tail_ = moveRange(bound, end, buffer_);
+            [[maybe_unused]] auto constructedEnd =
+                    moveRange(begin, bound, tail_);
+#if __cpp_exceptions
+            try {
+#endif
+                tail_ = moveRange(bound, end, buffer_);
+#if __cpp_exceptions
+            } catch (...) {
+                // Roll back the first segment if the second one fails.
+                std::destroy(tail_, constructedEnd);
+                throw;
+            }
+#endif
         }
         size_ += sz;
         if (tail_ == buffer_ + capacity_) {
@@ -197,6 +208,9 @@ class Queue {
         Queue q(std::max<size_t>(std::max<size_t>(newCapacity, 8),
                                  capacity_ * 2));
         auto dst = moveRange(first_range(), q.tail_);
+        // Track completed construction before the next transfer can throw.
+        q.tail_ = dst;
+        q.size_ = static_cast<size_t>(dst - q.buffer_);
         q.tail_ = moveRange(second_range(), dst);
         q.size_ = size_;
         *this = std::move(q);
