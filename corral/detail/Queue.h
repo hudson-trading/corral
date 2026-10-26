@@ -141,16 +141,16 @@ class Queue {
         } else {
             auto bound = begin;
             std::advance(bound, std::distance(tail_, buffer_ + capacity_));
-            [[maybe_unused]] auto constructedEnd =
-                    moveRange(begin, bound, tail_);
+            moveRange(begin, bound, tail_);
 #if __cpp_exceptions
             try {
 #endif
                 tail_ = moveRange(bound, end, buffer_);
 #if __cpp_exceptions
             } catch (...) {
-                // Roll back the first segment if the second one fails.
-                std::destroy(tail_, constructedEnd);
+                // Roll back the first segment, which always fills
+                // [tail_, buffer_ + capacity_), if the second one fails.
+                std::destroy(tail_, buffer_ + capacity_);
                 throw;
             }
 #endif
