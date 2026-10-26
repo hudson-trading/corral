@@ -26,6 +26,7 @@
 #pragma once
 #include "defs.h"
 #include "detail/IntrusiveList.h"
+#include "detail/ScopeGuard.h"
 
 namespace corral {
 
@@ -267,14 +268,6 @@ class Value<T>::AwaiterBase
   private:
     virtual bool matches(const T& from, const T& to) = 0;
 
-    void onChanged(const T& from, const T& to) {
-        if (matches(from, to)) {
-            handle_.resume();
-        } else {
-            park();
-        }
-    }
-
   private:
     Value<T>& cond_;
     Handle handle_;
@@ -375,15 +368,33 @@ template <class T> T Value<T>::modify(std::invocable<T&> auto&& fn) {
     T prev = value_;
     std::forward<decltype(fn)>(fn)(value_);
     T value = value_;
-    auto parked = std::move(parked_);
-    while (!parked.empty()) {
-        auto& p = parked.front();
-        parked.pop_front();
 
-        // Note: not using `value_` here; if `set()` is called outside
-        // of a task, then `onChanged()` will immediately resume the
-        // awaiting tasks, which could cause `value_` to change further.
-        p.onChanged(prev, value);
+    // If `set()` is called outside of a task, resuming an awaiter runs it
+    // immediately, which could cause `value_` to change further. So test
+    // every awaiter against this change (not against `value_`), and re-park
+    // the ones that don't match, before resuming any of them; otherwise
+    // awaiters not tested yet would miss the subsequent change.
+    auto pending = std::move(parked_);
+    auto it = pending.begin();
+    detail::ScopeGuard resume([&] {
+        // Awaiters before `it` have matched. Any others can only remain
+        // here if a predicate threw; they keep waiting for further changes.
+        while (it != pending.end()) {
+            (it++)->park();
+        }
+        while (!pending.empty()) {
+            auto& p = pending.front();
+            pending.pop_front();
+            p.handle_.resume();
+        }
+    });
+    while (it != pending.end()) {
+        auto& p = *it;
+        bool matched = p.matches(prev, value);
+        ++it;
+        if (!matched) {
+            p.park();
+        }
     }
     return value;
 }

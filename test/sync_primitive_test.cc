@@ -24,6 +24,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <functional>
+#include <stdexcept>
 #include <string>
 
 #include "../corral/corral.h"
@@ -210,5 +211,88 @@ CORRAL_TEST_CASE("value") {
                 CATCH_CHECK(!vf.isTrue());
             });
 }
+
+CORRAL_TEST_CASE("value-nested-set-from-callback") {
+    // Setting a Value from outside of a task (e.g. from an event loop
+    // callback) resumes matching awaiters immediately. If one of them
+    // changes the value again, awaiters which have not been notified
+    // of the first change yet must still observe the second one.
+    Value<int> v{0};
+    bool sawTwo = false, sawOneToTwo = false;
+
+    co_await anyOf(
+            allOf(
+                    [&]() -> Task<> {
+                        co_await v.untilEquals(1);
+                        v = 2;
+                    },
+                    [&]() -> Task<> {
+                        // Matched the first change; should still yield
+                        // the value it matched.
+                        int value = co_await v.untilEquals(1);
+                        CATCH_CHECK(value == 1);
+                    },
+                    [&]() -> Task<> {
+                        int value = co_await v.untilEquals(2);
+                        CATCH_CHECK(value == 2);
+                        sawTwo = true;
+                    },
+                    [&]() -> Task<> {
+                        auto [from, to] = co_await v.untilChanged(1, 2);
+                        CATCH_CHECK(from == 1);
+                        CATCH_CHECK(to == 2);
+                        sawOneToTwo = true;
+                    },
+                    [&]() -> Task<> {
+                        co_await yield;
+                        t.schedule(1ms, [&] { v = 1; });
+                    }),
+            t.sleep(5ms));
+
+    CATCH_CHECK(sawTwo);
+    CATCH_CHECK(sawOneToTwo);
+    CATCH_CHECK(t.now() == 1ms);
+}
+
+#if __cpp_exceptions
+CORRAL_TEST_CASE("value-throwing-predicate") {
+    // If a predicate throws, awaiters which have matched the change are
+    // still resumed, and no other awaiter stops waiting for further changes.
+    Value<int> v{0};
+    bool firstResumed = false, secondResumed = false, thirdResumed = false;
+
+    co_await anyOf(
+            allOf(
+                    [&]() -> Task<> {
+                        co_await v.untilEquals(1);
+                        firstResumed = true;
+                    },
+                    [&]() -> Task<> {
+                        auto throwing = [](int x) -> bool {
+                            if (x == 1) {
+                                throw std::runtime_error("test");
+                            }
+                            return x == 2;
+                        };
+                        co_await v.untilMatches(std::move(throwing));
+                        secondResumed = true;
+                    },
+                    [&]() -> Task<> {
+                        co_await v.untilEquals(2);
+                        thirdResumed = true;
+                    },
+                    [&]() -> Task<> {
+                        co_await yield;
+                        CATCH_CHECK_THROWS(v = 1);
+                        co_await yield;
+                        v = 2;
+                    }),
+            t.sleep(5ms));
+
+    CATCH_CHECK(firstResumed);
+    CATCH_CHECK(secondResumed);
+    CATCH_CHECK(thirdResumed);
+}
+#endif
 
 } // namespace
