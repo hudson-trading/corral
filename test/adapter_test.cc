@@ -23,7 +23,7 @@
 //
 // SPDX-License-Identifier: MIT
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 #define _USE_MATH_DEFINES 1
 #endif
 
