@@ -186,6 +186,7 @@ class WriteHalf : public corral::detail::ParkingLotImpl<WriteHalf<T>> {
     }
 
     bool reallyFull() const noexcept;
+    bool abortIfClosed(size_t claimedCount) noexcept;
 
     bool hasWaiters() const noexcept {
         return !WriteHalf::ParkingLotImpl::empty();
@@ -679,10 +680,26 @@ template <typename T> bool WriteHalf<T>::reallyFull() const noexcept {
 }
 
 template <typename T>
+bool WriteHalf<T>::abortIfClosed(size_t claimedCount) noexcept {
+    if (!channel().closed()) {
+        return false;
+    }
+    // Nothing may be written to a closed channel. This includes writers
+    // woken up by a reader: they hold a claim on the space it freed until
+    // they resume, and if the channel was closed in between, their write
+    // is aborted like any other pending one.
+    claims_ -= claimedCount;
+    return true;
+}
+
+template <typename T>
 template <typename U>
     requires(std::is_constructible_v<T, U>)
 bool WriteHalf<T>::tryTransfer(size_t claimedCount, U&& value) {
     CORRAL_ASSERT(claimedCount <= claims_);
+    if (abortIfClosed(claimedCount)) {
+        return false;
+    }
     if (!claimedCount && !unclaimedCount()) {
         return false;
     }
@@ -698,6 +715,9 @@ template <typename T>
 template <input_iterator_to<T> It>
 It WriteHalf<T>::tryTransfer(size_t claimedCount, It begin, It end) {
     CORRAL_ASSERT(claimedCount <= claims_);
+    if (abortIfClosed(claimedCount)) {
+        return begin;
+    }
     if (begin == end) {
         return begin;
     }
@@ -729,6 +749,9 @@ template <typename T>
 template <input_range_of<T> R>
 size_t WriteHalf<T>::tryTransfer(size_t claimedCount, R&& range) {
     CORRAL_ASSERT(claimedCount <= claims_);
+    if (abortIfClosed(claimedCount)) {
+        return 0;
+    }
     auto begin = std::ranges::begin(range);
     auto end = std::ranges::end(range);
     size_t n = 0;

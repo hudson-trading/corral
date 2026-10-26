@@ -204,6 +204,42 @@ CORRAL_TEST_CASE("bounded-channel-close") {
     CATCH_CHECK(sent == false);
 }
 
+CORRAL_TEST_CASE("bounded-channel-close-woken-writers") {
+    // A receive() wakes up blocked writers, which claim the space it frees
+    // but perform the actual transfer only once they resume. If the channel
+    // is closed in between, their writes must be aborted like any other
+    // pending write.
+    Channel<int> channel{2};
+    co_await channel.send(1);
+    co_await channel.send(2);
+
+    std::optional<bool> sent;
+    std::optional<size_t> sentBulk;
+    CORRAL_WITH_NURSERY(nursery) {
+        nursery.start([&]() -> Task<> { sent = co_await channel.send(3); });
+        nursery.start([&]() -> Task<> {
+            sentBulk = co_await channel.send(std::vector<int>{4, 5});
+        });
+        co_await t.sleep(1ms); // let both writers block
+
+        std::array<int, 2> buf{};
+        size_t received = co_await channel.receive(buf);
+        CATCH_CHECK(received == 2);
+        channel.close();
+
+        // Readers already see the end of the stream...
+        CATCH_CHECK(!channel.tryReceive());
+        co_return join;
+    };
+
+    // ...so nothing may be written after that.
+    CATCH_CHECK(sent == false);
+    CATCH_CHECK(sentBulk == 0u);
+    CATCH_CHECK(channel.empty());
+    std::optional<int> item = co_await channel.receive();
+    CATCH_CHECK(item == std::nullopt);
+}
+
 
 //
 // Unbounded channels
@@ -273,6 +309,27 @@ CORRAL_TEST_CASE("unbounded-channel-close") {
     // More writes will fail
     sent = co_await channel.send(2);
     CATCH_CHECK(!sent);
+}
+
+CORRAL_TEST_CASE("unbounded-channel-close-bulk-send") {
+    Channel<int> channel;
+    channel.close();
+
+    std::vector<int> v{1, 2, 3};
+    std::forward_list<int> fl{1, 2, 3};
+
+    CATCH_CHECK(channel.trySend(v) == 0);
+    CATCH_CHECK(channel.trySend(fl) == 0);
+    CATCH_CHECK((channel.trySend(v.begin(), v.end()) == v.begin()));
+
+    size_t sent = co_await channel.send(v);
+    CATCH_CHECK(sent == 0);
+    auto it = co_await channel.send(v.begin(), v.end());
+    CATCH_CHECK((it == v.begin()));
+
+    CATCH_CHECK(channel.empty());
+    std::optional<int> item = co_await channel.receive();
+    CATCH_CHECK(item == std::nullopt);
 }
 
 
