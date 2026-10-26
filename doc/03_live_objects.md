@@ -27,7 +27,7 @@ to that reference may use it to spawn tasks into that nursery:
 ```cpp
 void delayedPrint(corral::Nursery& n) {
     n.start([]() -> corral::Task<> {
-        co_await corral::sleepFor(io_service, 1s);
+        co_await corral::sleepFor(io_context, 1s);
         std::cout << "Hello, world!" << std::endl;
     });
 }

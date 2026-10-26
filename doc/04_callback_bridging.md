@@ -210,7 +210,7 @@ class MyReader : public IReader {
     // (The nursery doesn't directly use the event loop, but it needs
     // to be able to tell that its tasks are running "at the same time"
     // as other tasks that use this event loop.)
-    MyReader(boost::asio::io_service& io) : nursery_(io) {}
+    MyReader(boost::asio::io_context& io) : nursery_(io) {}
 
     void read(void* buf, size_t len, std::function<void(ssize_t)> cb) {
         nursery_.start([=]() -> corral::Task<> {
@@ -307,7 +307,7 @@ class MyReader: public IReader { // see above
     std::unique_ptr<corral::UnsafeNursery> nursery_;
 
   public:
-    MyReader(boost::asio::io_service& io):
+    MyReader(boost::asio::io_context& io):
         nursery_(std::make_unique<corral::UnsafeNursery>(io));
 
     ~MyReader() {

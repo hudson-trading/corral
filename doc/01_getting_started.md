@@ -26,10 +26,10 @@ distinguish them from async functions.)
 Here's our first async function, not that complicated or interesting yet:
 
 ```cpp
-boost::asio::io_service io_service;
+boost::asio::io_context io_context;
 corral::Task<void> async_hello() {
     std::cout << "getting ready..." << std::endl;
-    co_await corral::sleepFor(io_service, 100ms);
+    co_await corral::sleepFor(io_context, 100ms);
     std::cout << "Hello, world!" << std::endl;
 }
 ```
@@ -62,7 +62,7 @@ synchronous function (`main()`), how do we get to the point where we
 can run anything async?
 
 The answer is `corral::run()`, an ordinary (synchronous) function
-which accepts an event loop (such as the asio `io_service`) and an
+which accepts an event loop (such as the asio `io_context`) and an
 awaitable (most likely the task handle that's returned when you call
 an async function without `co_await`), and runs the event loop until
 the task represented by the awaitable completes. So to run the
@@ -70,7 +70,7 @@ the task represented by the awaitable completes. So to run the
 
 ```cpp
 int main() {
-    corral::run(io_service, wrap_hello());
+    corral::run(io_context, wrap_hello());
 }
 ```
 
@@ -89,7 +89,7 @@ corral::Task<void> hello_twice() {
     co_await corral::allOf(async_hello(), async_hello());
 }
 int main() {
-    corral::run(io_service, hello_twice());
+    corral::run(io_context, hello_twice());
 }
 ```
 
@@ -102,7 +102,7 @@ This outputs:
     Hello, world!
     Hello, world!
 
-While the first `co_await corral::sleepFor(io_service, 100ms)` was sleeping,
+While the first `co_await corral::sleepFor(io_context, 100ms)` was sleeping,
 the second one was also able to run. Awaiting something suspends the
 *current task* until the awaited operation completes, but other tasks can
 still run during that time.
@@ -162,7 +162,7 @@ several different cancellation models:
 * Attaching a timeout to a potentially long operation:
   ```cpp
   co_await corral::anyOf(somethingLong(),
-                         corral::sleepFor(io_service, 3s));
+                         corral::sleepFor(io_context, 3s));
   ```
 
 * Attaching a `corral::Event` to make something externally cancellable:
@@ -625,7 +625,7 @@ A relevant piece of code may look like this (error handling omitted
 for clarity):
 
 ```cpp
-asio::io_service io;
+asio::io_context io;
 corral::ThreadPool threadPool(io, /*threadCount = */ 8);
 
 struct SHA256 { char data[32] };

@@ -32,11 +32,11 @@
 
 using namespace std::chrono_literals;
 
-boost::asio::io_service io_service;
+boost::asio::io_context io_context;
 
 corral::Task<void> greet(std::string name) {
     std::cout << "Hello..." << std::endl;
-    co_await corral::sleepFor(io_service, 1s);
+    co_await corral::sleepFor(io_context, 1s);
     std::cout << "..." << name << std::endl;
 }
 
@@ -46,5 +46,5 @@ corral::Task<void> greetThings() {
 }
 
 int main(int argc, char** argv) {
-    corral::run(io_service, greetThings());
+    corral::run(io_context, greetThings());
 }

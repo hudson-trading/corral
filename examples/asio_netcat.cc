@@ -61,7 +61,7 @@ corral::Task<void> netcat(boost::asio::io_context& io_context,
 
     // Resolve a DNS name and connect
     tcp::resolver::results_type endpoints = co_await resolver.async_resolve(
-            {host, port}, corral::asio_awaitable);
+            host, port, corral::asio_awaitable);
     co_await boost::asio::async_connect(sock, endpoints,
                                         corral::asio_awaitable);
 
