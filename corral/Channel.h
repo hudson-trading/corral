@@ -33,6 +33,7 @@
 #include "config.h"
 #include "detail/ParkingLot.h"
 #include "detail/Queue.h"
+#include "detail/concept_helpers.h"
 
 namespace corral {
 
@@ -47,11 +48,11 @@ template <typename Half, typename... Args> class Awaiter;
 
 template <typename T, typename E>
 concept input_iterator_to =
-        std::input_iterator<T> && std::convertible_to<std::iter_value_t<T>, E>;
+        std::input_iterator<T> && std_convertible_to<std::iter_value_t<T>, E>;
 
 template <typename T, typename E>
 concept input_range_of = std::ranges::input_range<T> &&
-                         std::convertible_to<std::ranges::range_value_t<T>, E>;
+                         std_convertible_to<std::ranges::range_value_t<T>, E>;
 
 
 /// Interface for reading from a Channel. Exposed publicly as
