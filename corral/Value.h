@@ -286,7 +286,8 @@ template <class T>
 template <class Fn>
 class Value<T>::UntilMatches : public AwaiterBase {
   public:
-    UntilMatches(Value& cond, Fn fn) : AwaiterBase(cond), fn_(std::move(fn)) {
+    UntilMatches(Value& cond, Fn&& fn)
+      : AwaiterBase(cond), fn_(std::forward<Fn>(fn)) {
         if (fn_(cond.value_)) {
             result_ = cond.value_;
         }
@@ -349,8 +350,8 @@ template <class T>
 template <class Fn>
 class Value<T>::UntilChanged : public AwaiterBase {
   public:
-    explicit UntilChanged(Value& cond, Fn fn)
-      : AwaiterBase(cond), fn_(std::move(fn)) {}
+    explicit UntilChanged(Value& cond, Fn&& fn)
+      : AwaiterBase(cond), fn_(std::forward<Fn>(fn)) {}
 
     bool await_ready() const noexcept { return false; }
     std::pair<T, T> await_resume() && { return std::move(*result_); }

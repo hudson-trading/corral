@@ -211,4 +211,27 @@ CORRAL_TEST_CASE("value") {
             });
 }
 
+CORRAL_TEST_CASE("value-lvalue-predicates") {
+    Value<int> v{0};
+    auto matchesOne = [](const int& value) { return value == 1; };
+    auto changesFromOneToTwo = [](const int& from, const int& to) {
+        return from == 1 && to == 2;
+    };
+
+    co_await allOf(
+            [&]() -> Task<> {
+                CATCH_CHECK(co_await v.untilMatches(matchesOne) == 1);
+                auto [from, to] =
+                        co_await v.untilChanged(changesFromOneToTwo);
+                CATCH_CHECK(from == 1);
+                CATCH_CHECK(to == 2);
+            },
+            [&]() -> Task<> {
+                v = 1;
+                co_await yield;
+                v = 2;
+            });
+    CATCH_CHECK(t.now() == 0ms);
+}
+
 } // namespace
