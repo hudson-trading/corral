@@ -139,8 +139,9 @@ CORRAL_NOINLINE decltype(auto) run(EventLoop& eventLoop,
 }
 
 /// Returns a pointer to the executor associated with the current
-/// `corral::run()`. Example use case: collecting the task tree from
-/// non-async context (signal handler, etc).
+/// `corral::run()`. Example use cases: collecting the task tree, or
+/// reading `pending()`, from non-async context (signal handler, timer,
+/// etc).
 inline Executor* currentRunExecutor() {
     return detail::RunnerTracking::currentExecutor();
 }

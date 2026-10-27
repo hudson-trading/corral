@@ -363,5 +363,36 @@ CORRAL_TEST_CASE("multiverse") {
     CATCH_CHECK(t2.now() == 3ms);
 }
 
+CORRAL_TEST_CASE("executor-pending") {
+    Executor* ex = co_await getExecutor();
+    CATCH_CHECK(ex->pending() == 0);
+    CATCH_CHECK(currentRunExecutor() == ex);
+    CATCH_CHECK(currentRunExecutor()->pending() == 0);
+
+    ex->schedule([]() noexcept {});
+    ex->schedule([]() noexcept {});
+    CATCH_CHECK(ex->pending() == 2);
+
+    // sleep (unlike yield on clang) actually suspends, so the executor
+    // can drain the scheduled callbacks before we resume.
+    co_await t.sleep(1ms);
+    CATCH_CHECK(ex->pending() == 0);
+
+    Event a, b;
+    CORRAL_WITH_NURSERY(n) {
+        n.start([&]() -> Task<> { co_await a; });
+        n.start([&]() -> Task<> { co_await b; });
+        co_await t.sleep(1ms);
+        CATCH_CHECK(ex->pending() == 0);
+
+        a.trigger();
+        CATCH_CHECK(ex->pending() == 1);
+        b.trigger();
+        CATCH_CHECK(ex->pending() == 2);
+
+        co_return join;
+    };
+}
+
 
 } // namespace
