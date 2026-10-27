@@ -81,39 +81,13 @@ template <bool Copyable> struct TrackedQueueValue {
     }
 };
 
-// Forward iterator that supplies rvalue references without a range adaptor.
-template <class T> class MovingIterator {
-    T* ptr_ = nullptr;
-
-  public:
-    using iterator_concept = std::forward_iterator_tag;
-    using iterator_category = std::forward_iterator_tag;
-    using value_type = T;
-    using difference_type = std::ptrdiff_t;
-
-    MovingIterator() = default;
-    explicit MovingIterator(T* ptr) : ptr_(ptr) {}
-
-    T&& operator*() const { return std::move(*ptr_); }
-    MovingIterator& operator++() {
-        ++ptr_;
-        return *this;
-    }
-    MovingIterator operator++(int) {
-        auto prior = *this;
-        ++*this;
-        return prior;
-    }
-    bool operator==(const MovingIterator&) const = default;
-};
-
 template <class T>
 void appendPair(corral::detail::Queue<T>& queue, std::array<T, 2>& values) {
     if constexpr (std::is_copy_constructible_v<T>) {
         queue.append(values.begin(), values.end());
     } else {
-        queue.append(MovingIterator<T>{values.data()},
-                     MovingIterator<T>{values.data() + values.size()});
+        queue.append(std::make_move_iterator(values.begin()),
+                     std::make_move_iterator(values.end()));
     }
 }
 
