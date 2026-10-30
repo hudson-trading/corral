@@ -64,12 +64,14 @@
 
 // Users can provide their own logic to handle the case where an
 // UnsafeNursery is destroyed, or a corral::run()'s event loop stops,
-// before all tasks have exited. For example, this could
-// format the task tree and include it in an exception or assertion
-// message.
+// before all tasks have exited. The default implementation writes the
+// task tree to stderr (so a core, a log, or a CI failure shows which
+// tasks were still running) and then asserts. Override this if you
+// want different behavior, for example throwing an exception that
+// includes the formatted tree (see corral::formatTaskTree()).
 #ifndef CORRAL_FAIL_FOR_DANGLING_TASKS
 #define CORRAL_FAIL_FOR_DANGLING_TASKS(msg, root_awaitable)                    \
-    CORRAL_ASSERT(false && msg)
+    ::corral::detail::failForDanglingTasks((msg), (root_awaitable))
 #endif
 
 // Certain earlier versions of mainstream compilers or their STL used

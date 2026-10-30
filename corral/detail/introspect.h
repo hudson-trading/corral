@@ -26,6 +26,7 @@
 #pragma once
 
 #include <concepts>
+#include <cstdio>
 #include <iterator>
 #include <string>
 #include <variant>
@@ -147,6 +148,81 @@ template <class T> class AnnotatedTreeNode : public AwaiterAdapterBase<T> {
   private:
     std::string annotation_;
 };
+
+} // namespace detail
+
+/// Format one task-tree node as text and feed the pieces to `sink`.
+///
+/// `sink` is invoked with NUL-terminated C strings; pointers are only
+/// valid for the duration of that call. Indentation is two spaces per
+/// `TreeDumpElement::depth`. Task frames (program counters) are rendered
+/// as `Task 0x...` so they can be passed to addr2line; named introspect
+/// nodes are rendered as their `await_introspect()` name.
+template <class Sink>
+void writeTreeDumpElement(const TreeDumpElement& node, Sink&& sink) {
+    for (int i = 0; i < node.depth; ++i) {
+        sink("  ");
+    }
+    if (const uintptr_t* pc = std::get_if<uintptr_t>(&node.value)) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "Task 0x%llx",
+                      static_cast<unsigned long long>(*pc));
+        sink(buf);
+    } else if (const char* const* name = std::get_if<const char*>(&node.value)) {
+        sink(*name ? *name : "<unnamed>");
+#if __cpp_rtti
+    } else if (const std::type_info* const* ti =
+                       std::get_if<const std::type_info*>(&node.value)) {
+        sink(*ti && (*ti)->name() ? (*ti)->name()
+                                  : "<non-introspectable awaitable>");
+#endif
+    } else {
+        sink("<unknown awaitable>");
+    }
+    sink("\n");
+}
+
+inline void writeTreeDumpElement(const TreeDumpElement& node, std::FILE* out) {
+    if (!out) {
+        return;
+    }
+    writeTreeDumpElement(node, [out](const char* s) { std::fputs(s, out); });
+}
+
+/// Walk `root` (an awaitable or `Executor`) and feed a text rendering of
+/// its task tree to `sink`, one C string at a time. Useful for embedding
+/// the tree in an exception message from a custom
+/// `CORRAL_FAIL_FOR_DANGLING_TASKS`.
+template <class Awaitable, class Sink>
+void formatTaskTree(const Awaitable& root, Sink&& sink) {
+    detail::dumpTaskTree(root, [&](const TreeDumpElement& node) {
+        writeTreeDumpElement(node, sink);
+    });
+}
+
+/// Write a text rendering of the task tree under `root` to `out`.
+/// Intended for crash / dangling-task diagnostics; does not allocate.
+template <class Awaitable>
+void writeTaskTree(std::FILE* out, const Awaitable& root) {
+    if (!out) {
+        return;
+    }
+    formatTaskTree(root, [out](const char* s) { std::fputs(s, out); });
+}
+
+namespace detail {
+
+/// Default body of `CORRAL_FAIL_FOR_DANGLING_TASKS`: print the task tree
+/// to stderr so the failure is diagnosable, then assert.
+template <class Awaitable>
+void failForDanglingTasks(const char* msg, const Awaitable& root) {
+    std::fputs("corral: ", stderr);
+    std::fputs(msg ? msg : "(dangling tasks)", stderr);
+    std::fputs("\ntask tree:\n", stderr);
+    writeTaskTree(stderr, root);
+    std::fflush(stderr);
+    CORRAL_ASSERT(false && msg);
+}
 
 } // namespace detail
 } // namespace corral
